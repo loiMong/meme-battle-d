@@ -1,0 +1,260 @@
+:root{
+  --bg1:#070a13;
+  --bg2:#0a1030;
+  --card:rgba(255,255,255,0.06);
+  --card2:rgba(255,255,255,0.08);
+  --text:#e9ecff;
+  --muted:rgba(233,236,255,0.72);
+  --border:rgba(255,255,255,0.12);
+  --primary:#5a7bff;
+  --danger:#ff4d6d;
+}
+
+*{ box-sizing:border-box; }
+body{
+  margin:0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color:var(--text);
+  background: radial-gradient(1200px 600px at 50% 0%, rgba(90,123,255,0.25), transparent 60%),
+              radial-gradient(1200px 600px at 50% 100%, rgba(90,123,255,0.15), transparent 60%),
+              linear-gradient(180deg, var(--bg1), var(--bg2));
+  min-height:100vh;
+}
+.bg{
+  position:fixed; inset:0;
+  background: radial-gradient(800px 400px at 20% 20%, rgba(255,77,109,0.10), transparent 60%),
+              radial-gradient(900px 450px at 80% 30%, rgba(90,123,255,0.10), transparent 60%);
+  pointer-events:none;
+}
+.wrap{ max-width: 980px; margin: 0 auto; padding: 28px 16px 80px; position:relative; }
+.header h1{ margin: 0 0 6px; font-size: 40px; }
+.sub{ margin:0; color: var(--muted); }
+
+.card{
+  margin-top: 18px;
+  border:1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.35);
+}
+
+.screen h2{ margin: 4px 0 12px; font-size: 22px; }
+.hidden{ display:none !important; }
+
+.btns{ display:flex; gap:10px; flex-wrap:wrap; }
+button{
+  appearance:none;
+  border:1px solid var(--border);
+  background: var(--card2);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 12px;
+  cursor:pointer;
+}
+button:disabled{ opacity:0.45; cursor:not-allowed; }
+
+.primary{
+  background: linear-gradient(180deg, rgba(90,123,255,0.95), rgba(90,123,255,0.72));
+  border-color: rgba(90,123,255,0.55);
+}
+.secondary{
+  background: rgba(255,255,255,0.07);
+}
+.danger{
+  background: linear-gradient(180deg, rgba(255,77,109,0.95), rgba(255,77,109,0.7));
+  border-color: rgba(255,77,109,0.55);
+}
+.ghost{
+  background: transparent;
+}
+
+.hint{ color: var(--muted); margin-top: 10px; }
+
+.panel{
+  border:1px solid var(--border);
+  background: rgba(10,16,48,0.22);
+  border-radius: 16px;
+  padding: 14px;
+  margin-top: 12px;
+}
+
+.grid2{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 860px){
+  .grid2{ grid-template-columns: 1fr; }
+}
+
+label{ display:block; margin: 10px 0; color: var(--muted); }
+input, textarea{
+  width:100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border:1px solid var(--border);
+  background: rgba(0,0,0,0.18);
+  color: var(--text);
+}
+textarea{ resize: vertical; min-height: 120px; }
+
+.row{ display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.pill{
+  padding: 6px 10px;
+  border-radius: 999px;
+  border:1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.pill.ok{ color: rgba(165,255,206,0.95); border-color: rgba(165,255,206,0.35); }
+.pill.bad{ color: rgba(255,160,160,0.95); border-color: rgba(255,160,160,0.35); }
+
+.roomline{ display:flex; align-items:center; justify-content:space-between; gap: 10px; margin-top: 10px; }
+.muted{ color: var(--muted); font-size: 13px; }
+
+.list{ display:flex; flex-direction:column; gap: 8px; }
+.pl{ display:flex; justify-content:space-between; gap: 10px; padding: 8px 10px; border:1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.04); }
+.pl .st{ color: var(--muted); font-size: 12px; }
+
+.task{ padding: 10px 12px; border:1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.04); }
+
+.memes{
+  display:grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+@media (max-width: 900px){
+  .memes{ grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px){
+  .memes{ grid-template-columns: 1fr; }
+}
+
+.meme{
+  border:1px solid var(--border);
+  background: rgba(255,255,255,0.04);
+  border-radius: 16px;
+  padding: 10px;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+  gap: 8px;
+}
+.meme img{
+  width:100%;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.18);
+}
+.cap{ color: var(--muted); font-size: 13px; min-height: 18px; }
+.meta{ display:flex; justify-content:space-between; gap: 10px; font-size: 13px; }
+
+.sent{ color: rgba(165,255,206,0.95); font-weight: 600; padding: 10px 0; }
+
+.results{ display:flex; flex-direction:column; gap: 8px; }
+.res{ display:flex; justify-content:space-between; gap:10px; padding: 10px 12px; border:1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.04); }
+.res.win{ border-color: rgba(165,255,206,0.35); box-shadow: 0 0 0 1px rgba(165,255,206,0.12) inset; }
+
+/* Debug */
+.debug-btn{
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 9999;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(20,24,34,0.92);
+}
+.debug{
+  position: fixed;
+  right: 14px;
+  bottom: 60px;
+  width: min(560px, calc(100vw - 28px));
+  height: 280px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(10,16,40,0.92);
+  backdrop-filter: blur(10px);
+  z-index: 9999;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+}
+.debug-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.debug-body{
+  padding: 10px 12px;
+  overflow:auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  color: rgba(233,236,255,0.86);
+}
+.dbg{ padding: 4px 0; border-bottom: 1px dashed rgba(255,255,255,0.08); }
+.dbg .t{ color: rgba(233,236,255,0.55); margin-right: 6px; }
+.dbg .d{ color: rgba(233,236,255,0.75); }
+
+.offline{opacity:0.6; font-size:12px; margin-left:6px;}
+
+/* === PATCH: no-crop media frames (YT vs TikTok different) === */
+.meme .mediaFrame{
+  width: 100%;
+  height: auto;
+  overflow: visible; /* IMPORTANT: do not crop TikTok UI */
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.18);
+}
+
+/* Common media elements: keep original proportions, no crop */
+.meme .mediaFrame img,
+.meme .mediaFrame video{
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: contain;
+  max-height: 45vh; /* responsive limit, not fixed px */
+  border-radius: 14px;
+}
+
+/* YouTube: responsive ratio (height is defined by aspect-ratio on wrapper) */
+.meme .mediaFrame.ytFrame{
+  position: relative;
+  overflow: hidden;
+}
+.meme .mediaFrame.ytFrame iframe{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* TikTok: let the embed decide its own height; no absolute positioning, no crop */
+.meme .mediaFrame.ttFrame iframe{
+  width: 100%;
+  height: min(70vh, 820px); /* tall enough for TikTok player UI */
+  border: 0;
+  display: block;
+}
+
+/* If previous patches forced fixed heights/aspect for generic wrappers, neutralize them */
+.meme .media,
+.meme .meme-media,
+.meme .embed,
+.meme .embedWrap,
+.meme .frame,
+.meme .preview{
+  aspect-ratio: auto !important;
+  max-height: none !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+/* === END PATCH === */

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Мем-баттл</title>
+  <link rel="stylesheet" href="./style.css"/>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div class="wrap">
+    <header class="header">
+      <h1>Мем-баттл</h1>
+      <p class="sub">Одна ссылка — и сервер, и фронт. Ведущий на ПК, игроки на телефонах.</p>
+    </header>
+
+    <main class="card">
+      <section id="screen-mode" class="screen">
+        <h2>Выбери режим</h2>
+        <div class="btns">
+          <button id="btn-mode-host" class="primary">Я ведущий (экран для всех)</button>
+          <button id="btn-mode-player" class="secondary">Я игрок (телефон)</button>
+        </div>
+        <p class="hint">Диагностика: кнопка <b>DEBUG</b> внизу справа или <code>?debug=1</code> в URL.</p>
+      </section>
+
+      <section id="screen-host" class="screen hidden">
+        <div class="row">
+          <h2>Ведущий</h2>
+          <div class="pill" id="host-conn">offline</div>
+        </div>
+
+        <div class="panel">
+          <button id="host-create-room" class="primary">Создать комнату</button>
+          <div class="roomline">
+            <div>Код: <b id="host-room-code">—</b></div>
+            <button id="host-copy-link" class="ghost">Скопировать ссылку</button>
+          </div>
+          <div class="muted" id="host-room-link"></div>
+        </div>
+
+        <div class="grid2">
+          <div class="panel">
+            <h3>Настройки игры</h3>
+            <label>Раундов:
+              <input id="host-total-rounds" type="number" min="1" max="20" value="5"/>
+            </label>
+            <label>Задания (по одному на строку):
+              <textarea id="host-tasks" rows="6" placeholder="Мем про...\nМем когда...\n..."></textarea>
+            </label>
+            <div class="btns">
+              <button id="host-start-game" class="primary">Начать игру</button>
+              <button id="host-next-round" class="secondary" disabled>Следующий раунд</button>
+              <button id="host-start-vote" class="secondary" disabled>Начать голосование</button>
+              <button id="host-end-game" class="danger" disabled>Завершить игру</button>
+              <button id="host-new-game" class="secondary hidden">Новая игра</button>
+            </div>
+            <div class="muted" id="host-round-info">Раунд: —</div>
+          </div>
+
+          <div class="panel">
+            <h3>Игроки</h3>
+            <div id="host-players" class="list"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Мемы раунда</h3>
+          <div id="host-memes" class="memes"></div>
+          <div class="muted" id="host-phase">Фаза: —</div>
+        </div>
+
+        <div class="panel">
+          <h3>Результаты</h3>
+          <div id="host-results" class="results"></div>
+        </div>
+      </section>
+
+      <section id="screen-player" class="screen hidden">
+        <div class="row">
+          <h2>Игрок</h2>
+          <div class="pill" id="player-conn">offline</div>
+        </div>
+
+        <div class="panel">
+          <label>Код комнаты:
+            <input id="player-room" placeholder="ABCD" autocomplete="off"/>
+          </label>
+          <label>Ник:
+            <input id="player-nick" placeholder="Твой ник" autocomplete="off"/>
+          </label>
+          <button id="player-join" class="primary">Войти</button>
+          <div class="muted" id="player-join-status"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Задание</h3>
+          <div id="player-task" class="task">—</div>
+        </div>
+
+        <div class="panel">
+          <h3>Отправь мем</h3>
+          <label>Ссылка на картинку/GIF:
+            <input id="player-meme-url" placeholder="https://..." autocomplete="off"/>
+          </label>
+
+          <label>Файл (картинка или GIF):
+            <input id="player-meme-file" type="file" accept="image/*,image/gif"/>
+          </label>
+          <div class="muted">Если выбран файл — ссылка будет игнорироваться. Лимит ~8MB.</div>
+
+          <label>Подпись (необязательно):
+            <input id="player-meme-caption" placeholder="..." autocomplete="off"/>
+          </label>
+          <div class="btns">
+            <button id="player-send-meme" class="primary">Отправить</button>
+            <div id="player-sent" class="sent hidden">✅ Мем отправлен</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Голосование</h3>
+          <div id="player-vote" class="memes"></div>
+          <div id="player-voted" class="sent hidden">✅ Голос учтён</div>
+        </div>
+
+        <div class="panel">
+          <h3>Финал</h3>
+          <div id="player-final" class="results"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <button id="debug-toggle" class="debug-btn">DEBUG</button>
+  <div id="debug-panel" class="debug hidden">
+    <div class="debug-head">
+      <b>DEBUG</b>
+      <button id="debug-close" class="ghost">×</button>
+    </div>
+    <div id="debug-body" class="debug-body"></div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="./script.js"></script>
+</body>
+</html>
