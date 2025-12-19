@@ -119,6 +119,25 @@ function pushDebug(tag, detail){
   row.innerHTML = `<span class="t">[${now()}]</span> <b>${tag}</b> <span class="d">${typeof detail === "string" ? detail : safeJson(detail)}</span>`;
   body.prepend(row);
 }
+async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
+  const rawUrl = String(inputUrl || "").trim();
+  if(!rawUrl) return { url: rawUrl };
+  pushDebug("normalize-link", { in: rawUrl });
+  try{
+    const res = await fetch("/api/normalize-video-link", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: rawUrl }),
+    });
+    const data = await res.json();
+    const normalized = data?.embedUrl || data?.browserUrl || rawUrl;
+    pushDebug("normalize-link", { ok: data?.ok, out: normalized, id: data?.videoId || "" });
+    return { url: normalized, data };
+  }catch(e){
+    pushDebug("normalize-link", { error: String(e) });
+    return { url: rawUrl, error: e };
+  }
+}
 function setDebug(open){ $("debug-panel")?.classList.toggle("hidden", !open); }
 $("debug-toggle")?.addEventListener("click", () => setDebug($("debug-panel")?.classList.contains("hidden")));
 $("debug-close")?.addEventListener("click", () => setDebug(false));
@@ -407,6 +426,8 @@ $("player-send-meme")?.addEventListener("click", async () => {
     url = await fileToDataUrl(file);
   }else{
     url = String($("player-meme-url").value || "").trim();
+    const normalized = await normalizeVideoLink(url); // PATCH: TikTok normalize
+    url = normalized.url || url; // PATCH: TikTok normalize
   }
   const caption = String($("player-meme-caption").value || "").trim();
   socket.emit("player-send-meme", { roomCode: playerState.roomCode, url, caption }, (res)=>{

@@ -14,6 +14,7 @@ const PORT = process.env.PORT || 3000;
 const app = express();
 const server = http.createServer(app);
 
+app.use(express.json({ limit: "12mb" })); // PATCH: TikTok normalize
 app.use(express.static(path.join(__dirname, ".")));
 app.get("/health", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
@@ -43,6 +44,65 @@ function randomCode(len = 4) {
   for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
   return s;
 }
+
+const TIKTOK_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"; // PATCH: TikTok normalize
+function isTikTokUrl(rawUrl) { // PATCH: TikTok normalize
+  try {
+    const u = new URL(rawUrl);
+    return /tiktok\.com$/i.test(u.hostname) || /\.tiktok\.com$/i.test(u.hostname);
+  } catch {
+    return false;
+  }
+}
+async function resolveTikTokRedirects(inputUrl) { // PATCH: TikTok normalize
+  let current = inputUrl;
+  for (let i = 0; i < 8; i++) {
+    const res = await fetch(current, {
+      method: "GET",
+      redirect: "manual",
+      headers: { "user-agent": TIKTOK_UA, "accept": "text/html,application/xhtml+xml" },
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) break;
+      current = new URL(location, current).toString();
+      continue;
+    }
+    break;
+  }
+  return current;
+}
+function extractTikTokId(url) { // PATCH: TikTok normalize
+  const str = String(url || "");
+  const m1 = str.match(/\/video\/(\d+)/i);
+  const m2 = str.match(/\/v\/(\d+)\.html/i);
+  const m3 = str.match(/\/embed\/(\d+)/i);
+  return (m1 && m1[1]) || (m2 && m2[1]) || (m3 && m3[1]) || "";
+}
+
+app.post("/api/normalize-video-link", async (req, res) => { // PATCH: TikTok normalize
+  try {
+    const rawUrl = String(req.body?.url || "").trim();
+    if (!rawUrl) return res.json({ ok: false, reason: "E_BAD_URL", error: "url required" });
+    if (!isTikTokUrl(rawUrl)) return res.json({ ok: false, reason: "E_NOT_TIKTOK", error: "not tiktok" });
+
+    const resolvedUrl = await resolveTikTokRedirects(rawUrl);
+    const videoId = extractTikTokId(resolvedUrl);
+    const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}` : "";
+    const browserUrl = resolvedUrl;
+
+    return res.json({
+      ok: true,
+      platform: "tiktok",
+      resolvedUrl,
+      browserUrl,
+      embedUrl,
+      videoId,
+    });
+  } catch (error) {
+    return res.json({ ok: false, reason: "E_NORMALIZE_FAIL", error: String(error?.message || error) });
+  }
+});
 
 const rooms = Object.create(null);
 
