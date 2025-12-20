@@ -89,13 +89,12 @@ app.post("/api/normalize-video-link", async (req, res) => { // PATCH: TikTok nor
     const resolvedUrl = await resolveTikTokRedirects(rawUrl);
     const videoId = extractTikTokId(resolvedUrl);
     const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}` : "";
-    const browserUrl = resolvedUrl;
+    const finalUrl = resolvedUrl;
 
     return res.json({
       ok: true,
       platform: "tiktok",
-      resolvedUrl,
-      browserUrl,
+      finalUrl,
       embedUrl,
       videoId,
     });

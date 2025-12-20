@@ -27,7 +27,8 @@ function detectMediaType(url){
     const m1 = u.match(/[?&]v=([^&]+)/i);
     const m2 = u.match(/youtu\.be\/([^?&#/]+)/i);
     const m3 = u.match(/\/shorts\/([^?&#/]+)/i);
-    id = (m1 && m1[1]) || (m2 && m2[1]) || (m3 && m3[1]) || "";
+    const m4 = u.match(/\/embed\/([^?&#/]+)/i);
+    id = (m1 && m1[1]) || (m2 && m2[1]) || (m3 && m3[1]) || (m4 && m4[1]) || "";
     if(id) id = id.split(/[?&#]/)[0];
     return { type: "youtube", id, isShorts };
   }
@@ -36,7 +37,9 @@ function detectMediaType(url){
   if(/tiktok\.com/i.test(u)){
     // Try to get numeric video id from /video/123...
     const m1 = u.match(/\/video\/(\d+)/i);
-    const id = m1 ? m1[1] : "";
+    const m2 = u.match(/\/embed\/v2\/(\d+)/i);
+    const m3 = u.match(/\/embed\/(\d+)/i);
+    const id = (m1 && m1[1]) || (m2 && m2[1]) || (m3 && m3[1]) || "";
     return { type: "tiktok", id, url: u };
   }
 
@@ -124,13 +127,23 @@ async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
   if(!rawUrl) return { url: rawUrl };
   pushDebug("normalize-link", { in: rawUrl });
   try{
+    if (/(youtube\.com|youtu\.be)/i.test(rawUrl)) {
+      const info = detectMediaType(rawUrl);
+      if (info.type === "youtube" && info.id) {
+        return { url: `https://www.youtube.com/embed/${info.id}?rel=0&modestbranding=1` };
+      }
+      return { url: rawUrl };
+    }
+    if (!/tiktok\.com/i.test(rawUrl)) {
+      return { url: rawUrl };
+    }
     const res = await fetch("/api/normalize-video-link", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ url: rawUrl }),
     });
     const data = await res.json();
-    const normalized = data?.embedUrl || data?.browserUrl || rawUrl;
+    const normalized = data?.embedUrl || data?.finalUrl || data?.browserUrl || rawUrl;
     pushDebug("normalize-link", { ok: data?.ok, out: normalized, id: data?.videoId || "" });
     return { url: normalized, data };
   }catch(e){

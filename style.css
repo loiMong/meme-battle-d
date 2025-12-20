@@ -207,7 +207,7 @@ textarea{ resize: vertical; min-height: 120px; }
 .meme .mediaFrame{
   width: 100%;
   height: auto;
-  overflow: visible; /* IMPORTANT: do not crop TikTok UI */
+  overflow: hidden;
   border-radius: 14px;
   border: 1px solid rgba(255,255,255,0.10);
   background: rgba(0,0,0,0.18);
@@ -237,12 +237,26 @@ textarea{ resize: vertical; min-height: 120px; }
   border: 0;
 }
 
-/* TikTok: let the embed decide its own height; no absolute positioning, no crop */
+/* TikTok: fixed device tuning without UI */
+.meme .mediaFrame.ttFrame{
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 9 / 16;
+  background: #000;
+}
 .meme .mediaFrame.ttFrame iframe{
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: min(70vh, 820px); /* tall enough for TikTok player UI */
+  height: 100%;
   border: 0;
-  display: block;
+  transform: translate(0px, 0px) scale(1);
+  transform-origin: center top;
+}
+@media (min-width: 900px){
+  .meme .mediaFrame.ttFrame iframe{
+    transform: translate(6px, -2px) scale(1.30);
+  }
 }
 
 /* If previous patches forced fixed heights/aspect for generic wrappers, neutralize them */
