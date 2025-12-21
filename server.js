@@ -76,7 +76,7 @@ app.post("/api/normalize-video-link", async (req, res) => {
           const o = await tryTikTokOEmbed(inputUrl);
           if (o?.videoId) videoId = o.videoId;
         }catch(e){
-          return res.status(200).json({
+          return res.json({
             ok: false,
             inputUrl,
             finalUrl,
@@ -88,26 +88,26 @@ app.post("/api/normalize-video-link", async (req, res) => {
         }
       }
 
-      if (videoId) {
+      if (!videoId) {
         return res.json({
-          ok: true,
+          ok: false,
           inputUrl,
           finalUrl,
-          videoId,
-          embedUrl: `https://www.tiktok.com/embed/v2/${videoId}`,
+          videoId: null,
+          embedUrl: inputUrl,
           status: 200,
-          error: null
+          error: "Video ID not found"
         });
       }
 
-      return res.status(200).json({
-        ok: false,
+      return res.json({
+        ok: true,
         inputUrl,
         finalUrl,
-        videoId: null,
-        embedUrl: inputUrl,
+        videoId,
+        embedUrl: `https://www.tiktok.com/embed/v2/${videoId}`,
         status: 200,
-        error: "Video ID not found"
+        error: null
       });
     }
 
