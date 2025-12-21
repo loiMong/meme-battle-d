@@ -319,6 +319,10 @@ async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
   if(!rawUrl) return { url: rawUrl };
   pushDebug("normalize-link", { in: rawUrl });
   try{
+    const detected = detectMediaType(rawUrl);
+    if (detected.type === "tiktok" && detected.id) {
+      return { url: `https://www.tiktok.com/embed/v2/${detected.id}` };
+    }
     if (/(youtube\.com|youtu\.be)/i.test(rawUrl)) {
       const info = detectMediaType(rawUrl);
       if (info.type === "youtube" && info.id) {
