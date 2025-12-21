@@ -49,7 +49,7 @@ async function tryTikTokOEmbed(inputUrl, timeoutMs = 6000){
   if(!r.ok) return null;
   const j = await r.json();
   const html = j && j.html ? String(j.html) : "";
-  const m = html.match(/embed\/v2\/(\d+)/) || html.match(/data-video-id=['"](\d+)['"]/);
+  const m = html.match(/data-video-id=['"](\d+)['"]/) || html.match(/embed\/v2\/(\d+)/);
   const videoId = m ? m[1] : null;
   return { videoId, html };
 }
@@ -68,53 +68,45 @@ app.post("/api/normalize-video-link", async (req, res) => {
 
     // TikTok
     if(/tiktok\.com/i.test(inputUrl)){
-      let finalUrl = inputUrl;
-      let videoId = extractTikTokId(finalUrl);
+      const finalUrl = inputUrl;
+      let videoId = extractTikTokId(inputUrl);
 
-      // direct id from video or embed urls
-      if (!videoId) {
-        const directId = extractTikTokId(inputUrl);
-        if (directId) videoId = directId;
-      }
-
-      // try oEmbed (best for vm.tiktok redirects too)
-      if(!videoId){
+      if (!videoId && /(vm\.tiktok\.com|vt\.tiktok\.com|\/t\/)/i.test(inputUrl)) {
         try{
           const o = await tryTikTokOEmbed(inputUrl);
-          if(o?.videoId) videoId = o.videoId;
+          if (o?.videoId) videoId = o.videoId;
         }catch(e){
-          return res.status(502).json({
+          return res.status(200).json({
             ok: false,
             inputUrl,
             finalUrl,
             videoId: null,
             embedUrl: inputUrl,
-            status: 502,
+            status: 200,
             error: "oEmbed failed"
           });
         }
       }
 
       if (videoId) {
-        const embedUrl = `https://www.tiktok.com/embed/v2/${videoId}`;
         return res.json({
           ok: true,
           inputUrl,
           finalUrl,
           videoId,
-          embedUrl,
+          embedUrl: `https://www.tiktok.com/embed/v2/${videoId}`,
           status: 200,
           error: null
         });
       }
 
-      return res.status(422).json({
+      return res.status(200).json({
         ok: false,
         inputUrl,
         finalUrl,
         videoId: null,
         embedUrl: inputUrl,
-        status: 422,
+        status: 200,
         error: "Video ID not found"
       });
     }
