@@ -72,12 +72,17 @@ function renderMediaHTML(url){
   }
 
   // TikTok: per-device crop/zoom profiles (see DEBUG panel)
-  if (meta.type === "tiktok") {
+  if (info.type === "tiktok") {
+    const embedUrl = /\/embed\//i.test(info.url || "")
+      ? info.url
+      : info.id
+        ? `https://www.tiktok.com/embed/v2/${info.id}`
+        : info.url;
     return `
       <div class="mediaFrame ttFrame">
         <div class="ttViewport">
           <iframe
-            src="${meta.embedUrl}"
+            src="${embedUrl}"
             loading="lazy"
             allowfullscreen
             referrerpolicy="no-referrer-when-downgrade"
@@ -129,7 +134,6 @@ function pushDebug(tag, detail){
   row.innerHTML = `<span class="t">[${now()}]</span> <b>${tag}</b> <span class="d">${typeof detail === "string" ? detail : safeJson(detail)}</span>`;
   body.prepend(row);
 }
-async 
 // ===== TikTok player profiles (per-device) =====
 const LS_TT = "tt_profiles_v1";
 const LS_TT_MODE = "tt_video_only_v1";
