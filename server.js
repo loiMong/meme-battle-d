@@ -4,108 +4,137 @@
  * - Socket.IO realtime room state
  * - Host anonymity: memes are not sent in room-status during collect until revealed
  */
-import path from "path";
-import express from "express";
-import http from "http";
-import { Server } from "socket.io";
-import { fileURLToPath } from "url";
+const path = require("path");
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT || 3000;
 
 const app = express();
 const server = http.createServer(app);
 
-app.use(express.json({ limit: "2mb" }));
-app.use(express.static(path.join(__dirname, ".")));
-app.get("/health", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-/* === TikTok normalize endpoint (accepts app/share links and returns embed URL) === */
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+// --- Normalize TikTok links to safe embed URLs (prevents net::ERR_BLOCKED_BY_RESPONSE in iframes) ---
+async function doFetch(url, opts){
+  if (typeof fetch === "function") return fetch(url, opts);
+  const mod = await import("node-fetch");
+  return mod.default(url, opts);
+}
 
-function sanitizeUrl(u) {
-  if (typeof u !== "string") return null;
-  const trimmed = u.trim();
-  if (!trimmed) return null;
-  try {
-    const url = new URL(trimmed);
-    if (!["http:", "https:"].includes(url.protocol)) return null;
-    return url.toString();
-  } catch {
+function extractTikTokId(url){
+  const s = String(url || "");
+  return (
+    s.match(/\/video\/(\d{10,})/i)?.[1] ||
+    s.match(/\/embed\/v2\/(\d{10,})/i)?.[1] ||
+    s.match(/\/embed\/(\d{10,})/i)?.[1] ||
+    s.match(/[?&](?:item_id|share_item_id|aweme_id)=(\d{10,})/i)?.[1] ||
+    null
+  );
+}
+
+function toTikTokEmbedFast(url){
+  const id = extractTikTokId(url);
+  return id ? `https://www.tiktok.com/embed/v2/${id}` : String(url || "");
+}
+
+async function tryTikTokOEmbed(inputUrl, timeoutMs = 6000){
+  const api = "https://www.tiktok.com/oembed?url=" + encodeURIComponent(String(inputUrl || ""));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try{
+    const r = await doFetch(api, {
+      headers: {
+        "user-agent": "Mozilla/5.0",
+        "accept": "application/json,text/plain,*/*"
+      },
+      signal: controller.signal
+    });
+    if(!r.ok) return null;
+    const j = await r.json();
+    const html = j && j.html ? String(j.html) : "";
+    const id = extractTikTokId(html);
+    return id ? { videoId: id } : null;
+  }catch(e){
     return null;
+  }finally{
+    clearTimeout(timer);
   }
 }
 
-function extractTikTokId(urlStr) {
-  try {
-    const u = new URL(urlStr);
-    const p = u.pathname || "";
-    const m1 = p.match(/\/video\/(\d+)/);
-    if (m1 && m1[1]) return m1[1];
-    const m2 = p.match(/\/embed(?:\/v2)?\/(\d+)/);
-    if (m2 && m2[1]) return m2[1];
-  } catch {}
-  return null;
-}
-
-async function resolveViaOEmbed(originalUrl) {
-  try {
-    const resp = await fetch(
-      `https://www.tiktok.com/oembed?url=${encodeURIComponent(originalUrl)}`,
-      { headers: { "user-agent": UA } }
-    );
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const html = data?.html || "";
-    const match = html.match(/data-video-id="(\d+)"/);
-    if (match && match[1]) return match[1];
-  } catch {}
-  return null;
+async function resolveRedirect(url, timeoutMs = 6000){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try{
+    const r = await doFetch(String(url), {
+      redirect: "follow",
+      headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,*/*" },
+      signal: controller.signal
+    });
+    return r?.url || String(url);
+  }catch(e){
+    return String(url);
+  }finally{
+    clearTimeout(timer);
+  }
 }
 
 app.post("/api/normalize-video-link", async (req, res) => {
-  try {
-    const inputUrl = String(req.body?.url || "").trim();
-    if (!inputUrl) return res.status(400).json({ ok: false, error: "missing url" });
+  const inputUrl = String(req.body?.url || "").trim();
+  try{
+    if(!inputUrl) return res.status(400).json({ ok:false, reason:"url is required" });
 
-    const lower = inputUrl.toLowerCase();
-    if (!lower.includes("tiktok.com")) {
-      return res.json({ ok: true, inputUrl, finalUrl: inputUrl, videoId: null, embedUrl: null, platform: "other" });
+    // Only TikTok is normalized here
+    if(!/tiktok\.com/i.test(inputUrl)){
+      return res.json({ ok:false, reason:"not_tiktok", inputUrl, finalUrl: inputUrl });
     }
 
-    const directId =
-      inputUrl.match(/\/video\/(\d+)/i)?.[1] ||
-      inputUrl.match(/\/embed\/v2\/(\d+)/i)?.[1] ||
-      inputUrl.match(/[?&]item_id=(\d+)/i)?.[1];
-
-    let videoId = directId || null;
-
-    let resolved = null;
-    if (!videoId) {
-      resolved = await resolveViaOEmbed(inputUrl);
-      videoId = resolved?.videoId || null;
+    // 1) Fast path: already has id
+    const fastId = extractTikTokId(inputUrl);
+    if (fastId){
+      return res.json({
+        ok: true,
+        inputUrl,
+        finalUrl: inputUrl,
+        videoId: fastId,
+        embedUrl: `https://www.tiktok.com/embed/v2/${fastId}`
+      });
     }
 
-    const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}` : null;
+    // 2) oEmbed (works for vm/vt short links often)
+    const o = await tryTikTokOEmbed(inputUrl);
+    if (o?.videoId){
+      return res.json({
+        ok: true,
+        inputUrl,
+        finalUrl: inputUrl,
+        videoId: o.videoId,
+        embedUrl: `https://www.tiktok.com/embed/v2/${o.videoId}`
+      });
+    }
 
-    return res.json({
-      ok: true,
-      inputUrl,
-      finalUrl: resolved?.finalUrl || inputUrl,
-      videoId,
-      embedUrl,
-      status: resolved?.status || 200,
-      hops: resolved?.hops || 0,
-      platform: "tiktok",
-    });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e) });
+    // 3) Resolve redirect and try again
+    const finalUrl = await resolveRedirect(inputUrl);
+    const id = extractTikTokId(finalUrl);
+    if(id){
+      return res.json({
+        ok: true,
+        inputUrl,
+        finalUrl,
+        videoId: id,
+        embedUrl: `https://www.tiktok.com/embed/v2/${id}`
+      });
+    }
+
+    return res.json({ ok:false, reason:"video_id_not_found", inputUrl, finalUrl });
+  }catch(err){
+    return res.status(500).json({ ok:false, reason: String(err?.message || err) });
   }
 });
+// --- End normalize ---
 
-
+app.use(express.static(path.join(__dirname, ".")));
+app.get("/health", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
 const io = new Server(server, {
   cors: { origin: "*" },
@@ -334,7 +363,9 @@ io.on("connection", (socket) => {
       const p = getPlayer(room, socket);
       if (!p) return cbErr(cb, "E_NOT_IN_ROOM", "Вы не в комнате");
 
-      const url = String(payload?.url || "").trim();
+      let url = String(payload?.url || "").trim();
+    // Normalize TikTok share links to embed URLs (fast, no network)
+    url = toTikTokEmbedFast(url);
       const caption = String(payload?.caption || "").trim().slice(0, 140);
       if (!url) return cbErr(cb, "E_BAD_DATA", "Нужна ссылка или файл");
 

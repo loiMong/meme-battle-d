@@ -35,11 +35,16 @@ function detectMediaType(url){
 
   // TikTok
   if(/tiktok\.com/i.test(u)){
-    // Try to get numeric video id from /video/123...
-    const m1 = u.match(/\/video\/(\d+)/i);
-    const m2 = u.match(/\/embed\/v2\/(\d+)/i);
-    const m3 = u.match(/\/embed\/(\d+)/i);
-    const id = (m1 && m1[1]) || (m2 && m2[1]) || (m3 && m3[1]) || "";
+    // Support many share formats:
+    // - https://www.tiktok.com/@user/video/123...
+    // - https://www.tiktok.com/embed/v2/123...
+    // - ...?item_id=123...
+    const id =
+      (u.match(/\/video\/(\d{10,})/i)?.[1]) ||
+      (u.match(/\/embed\/v2\/(\d{10,})/i)?.[1]) ||
+      (u.match(/\/embed\/(\d{10,})/i)?.[1]) ||
+      (u.match(/[?&](?:item_id|share_item_id|aweme_id)=(\d{10,})/i)?.[1]) ||
+      "";
     return { type: "tiktok", id, url: u };
   }
 
@@ -70,14 +75,39 @@ function renderMediaHTML(url){
       </div>
     `;
   }
-
-  // TikTok: DO NOT crop. Use their embed iframe (it contains UI), let it define height.
+  // TikTok: ALWAYS render as embed (normal TikTok pages are blocked in iframes on mobile)
   if(info.type === "tiktok"){
-    // If we got an id, use embed v2 (more stable). Otherwise fallback to link.
-    const src = info.id ? `https://www.tiktok.com/embed/v2/${info.id}` : info.url;
+    let inIframe = false;
+    try{ inIframe = window.self !== window.top; }catch(e){ inIframe = true; }
+    pushDebug("render:tiktok", { in: String(url||""), id: info.id || null, parsedUrl: info.url || "", inIframe });
+    if(!info.id){
+      const href = String(info.url || "");
+      pushDebug("render:tiktok:no_id", { href, reason: "no_video_id_in_url" });
+      return `
+        <div class="mediaFrame">
+          <div class="muted">TikTok: встроить не удалось</div>
+          ${inIframe ? `<div class="muted" style="margin-top:6px">⚠️ В режиме Preview/встроенного браузера TikTok часто блокируется. Открой страницу в обычном браузере.</div>` : ``}
+          <a class="ghost" href="${href}" target="_blank" rel="noopener">Открыть в TikTok</a>
+        </div>
+      `;
+    }
+    const src = `https://www.tiktok.com/embed/v2/${info.id}`;
+    pushDebug("render:tiktok:embed", { src });
     return `
-      <div class="mediaFrame ttFrame">
-        <iframe src="${src}" scrolling="no" allow="encrypted-media; picture-in-picture" allowfullscreen></iframe>
+      <div class="mediaFrame ttFrame" data-mb-tt="1">
+        <div class="ttViewport">
+          <iframe
+            src="${src}"
+            data-mb-iframe="tiktok"
+            data-mb-src="${src}"
+            scrolling="no"
+            referrerpolicy="no-referrer-when-downgrade"
+            allow="encrypted-media; picture-in-picture; autoplay"
+            allowfullscreen
+            onload="window.__mbDbgOnIframeLoad && window.__mbDbgOnIframeLoad(this)"
+            onerror="window.__mbDbgOnIframeError && window.__mbDbgOnIframeError(this)"
+          ></iframe>
+        </div>
       </div>
     `;
   }
@@ -114,7 +144,29 @@ const LS_ROOM = "mb_room";
 function now() { return new Date().toLocaleTimeString(); }
 function safeJson(x){ try{ return JSON.stringify(x); } catch{ return String(x); } }
 
+function dbgValueShort(v){
+  const s = String(v ?? "");
+  if (s.startsWith("data:")) {
+    return { kind: "data", len: s.length, head: s.slice(0, 48) + "..." };
+  }
+  return { kind: "url", len: s.length, head: s.slice(0, 200) + (s.length > 200 ? "..." : "") };
+}
+
+// ===== Debug log store (so you can copy diagnostics) =====
+const DBG_MAX = 400;
+window.__MB_DBG = window.__MB_DBG || [];
+
 function pushDebug(tag, detail){
+  const entry = {
+    ts: new Date().toISOString(),
+    t: now(),
+    tag: String(tag),
+    detail
+  };
+  try{
+    window.__MB_DBG.unshift(entry);
+    if(window.__MB_DBG.length > DBG_MAX) window.__MB_DBG.length = DBG_MAX;
+  }catch(e){}
   const body = $("debug-body");
   if(!body) return;
   const row = document.createElement("div");
@@ -122,74 +174,389 @@ function pushDebug(tag, detail){
   row.innerHTML = `<span class="t">[${now()}]</span> <b>${tag}</b> <span class="d">${typeof detail === "string" ? detail : safeJson(detail)}</span>`;
   body.prepend(row);
 }
-async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
+
+function getDebugDump(){
+  const env = {
+    href: location.href,
+    origin: location.origin,
+    referrer: document.referrer,
+    ua: navigator.userAgent,
+    inIframe: window.self !== window.top,
+    viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio },
+  };
+  return {
+    env,
+    logs: Array.isArray(window.__MB_DBG) ? window.__MB_DBG.slice(0, DBG_MAX) : []
+  };
+}
+
+async function copyDebugToClipboard(){
+  try{
+    const dump = getDebugDump();
+    await navigator.clipboard.writeText(JSON.stringify(dump, null, 2));
+    pushDebug("debug", "copied to clipboard");
+    alert("Debug скопирован в буфер (JSON)");
+  }catch(e){
+    pushDebug("debug", { copyError: String(e) });
+    alert("Не удалось скопировать (возможно, запрет браузера). Открой DEBUG и скопируй вручную.");
+  }
+}
+
+function clearDebug(){
+  try{ window.__MB_DBG = []; }catch(e){}
+  const body = $("debug-body");
+  if(body) body.innerHTML = "";
+  pushDebug("debug", "cleared");
+}
+
+// Iframe load/error hooks (best-effort; browsers often don't fire onerror)
+window.__mbDbgOnIframeLoad = (el) => {
+  try{
+    el.dataset.mbLoaded = "1";
+    pushDebug("iframe:load", { src: el.src, w: el.clientWidth, h: el.clientHeight });
+    // Layout may finalize only after iframe load; re-apply TT vars using real viewport size
+    if (String(el?.dataset?.mbIframe || "") === "tiktok") {
+      applyTTVars("iframe-load");
+    }
+  }catch(e){}
+};
+window.__mbDbgOnIframeError = (el) => {
+  try{
+    pushDebug("iframe:error", { src: el?.src || "" });
+  }catch(e){}
+};
+
+// ===== TikTok crop/zoom profiles (per-device) =====
+// Stored in localStorage so you can tune once per device.
+const LS_TT_PROFILES = "mb_tt_profiles_v1";
+const LS_TT_FORCED = "mb_tt_forced_profile_v1";
+
+const TT_DEFAULTS = {
+  // values are tuned for a typical 9:16 viewport; they will be scaled to the actual card size
+  desktop:        { cropX: 0, zoom: 1.30, x: 6,  y: -2, cropBottom: 0 },
+  mobilePortrait: { cropX: 0, zoom: 1.00, x: 0,  y: 0,  cropBottom: 0 },
+  mobileLandscape:{ cropX: 0, zoom: 1.00, x: 0,  y: 0,  cropBottom: 0 },
+};
+
+function cloneTTDefaults(){
+  return {
+    desktop: { ...TT_DEFAULTS.desktop },
+    mobilePortrait: { ...TT_DEFAULTS.mobilePortrait },
+    mobileLandscape: { ...TT_DEFAULTS.mobileLandscape },
+  };
+}
+
+function loadTTProfiles(){
+  try{
+    const raw = localStorage.getItem(LS_TT_PROFILES);
+    if(!raw) return cloneTTDefaults();
+    const data = JSON.parse(raw);
+    return {
+      desktop: { ...TT_DEFAULTS.desktop, ...(data.desktop||{}) },
+      mobilePortrait: { ...TT_DEFAULTS.mobilePortrait, ...(data.mobilePortrait||{}) },
+      mobileLandscape: { ...TT_DEFAULTS.mobileLandscape, ...(data.mobileLandscape||{}) },
+    };
+  }catch(e){
+    return cloneTTDefaults();
+  }
+}
+
+function saveTTProfiles(profiles){
+  try{ localStorage.setItem(LS_TT_PROFILES, JSON.stringify(profiles)); }catch(e){}
+}
+
+function getTTForcedProfileKey(){
+  try{
+    const v = (new URLSearchParams(location.search).get("tt" )||"").trim();
+    if(v) return v;
+  }catch(e){}
+  try{ return localStorage.getItem(LS_TT_FORCED) || ""; }catch(e){ return ""; }
+}
+
+function setTTForcedProfileKey(key){
+  try{
+    if(!key) localStorage.removeItem(LS_TT_FORCED);
+    else localStorage.setItem(LS_TT_FORCED, key);
+  }catch(e){}
+}
+
+function getTTAutoProfileKey(){
+  const w = window.innerWidth || 0;
+  const h = window.innerHeight || 0;
+  const isPortrait = h >= w;
+  const isMobile = w <= 820; // rough; Bonsai WebView is usually < 500
+  if(isMobile && isPortrait) return "mobilePortrait";
+  if(isMobile && !isPortrait) return "mobileLandscape";
+  return "desktop";
+}
+
+function getTTViewportSize(){
+  // Prefer the actual rendered TikTok viewport; fallback to window size.
+  const el = document.querySelector(".ttViewport");
+  if(el && el.clientWidth && el.clientHeight) return { w: el.clientWidth, h: el.clientHeight };
+  const w = Math.max(1, window.innerWidth || 360);
+  // for 9:16 media, approximate height from width
+  const h = Math.max(1, Math.round(w * 16 / 9));
+  return { w, h };
+}
+
+function applyTTVars(reason = ""){ 
+  const profiles = loadTTProfiles();
+  const forced = getTTForcedProfileKey();
+  const key = (forced && profiles[forced]) ? forced : getTTAutoProfileKey();
+  const p = profiles[key] || TT_DEFAULTS.desktop;
+
+  const { w, h } = getTTViewportSize();
+  const baseW = 360;
+  const baseH = 640;
+  const sx = w / baseW;
+  const sy = h / baseH;
+
+  const scaled = {
+    cropX: Math.round((p.cropX||0) * sx),
+    x: Math.round((p.x||0) * sx),
+    y: Math.round((p.y||0) * sy),
+    cropBottom: Math.round((p.cropBottom||0) * sy),
+    zoom: Number(p.zoom||1),
+  };
+
+  const root = document.documentElement;
+  root.style.setProperty("--ttCropX", `${scaled.cropX}px`);
+  root.style.setProperty("--ttX", `${scaled.x}px`);
+  root.style.setProperty("--ttY", `${scaled.y}px`);
+  root.style.setProperty("--ttCropBottom", `${scaled.cropBottom}px`);
+  root.style.setProperty("--ttZoom", String(scaled.zoom));
+
+  // Avoid spamming debug: log only when something реально изменилось
+  const sig = `${key}|${forced ? 1 : 0}|${w}x${h}|${scaled.cropX}|${scaled.zoom}|${scaled.x}|${scaled.y}|${scaled.cropBottom}`;
+  if (window.__mbTTLastSig !== sig) {
+    window.__mbTTLastSig = sig;
+    pushDebug("tt:apply", { reason, profile: key, forced: !!forced, viewport: { w, h }, raw: p, scaled });
+  }
+}
+
+function ensureTTDebugControls(){
+  const panel = document.getElementById("debug-panel");
+  const body = document.getElementById("debug-body");
+  if(!panel || !body) return;
+  if(document.getElementById("debug-tt")) return;
+
+  const wrap = document.createElement("div");
+  wrap.id = "debug-tt";
+  wrap.className = "debug-tt";
+  wrap.innerHTML = `
+    <div class="debug-tt-title">TikTok crop</div>
+    <div class="debug-tt-row">
+      <label>Профиль</label>
+      <select id="tt-prof" class="debug-tt-select">
+        <option value="desktop">ПК / большой экран</option>
+        <option value="mobilePortrait">Мобилка — вертикаль</option>
+        <option value="mobileLandscape">Мобилка — горизонталь</option>
+      </select>
+      <button id="tt-force" class="debug-tt-btn" title="Зафиксировать этот профиль">fix</button>
+      <button id="tt-unforce" class="debug-tt-btn" title="Снять фиксацию">auto</button>
+    </div>
+
+    <div class="debug-tt-row"><label>Обрезка по бокам</label><input id="tt-cropX" type="range" min="0" max="60" step="1"><span id="tt-cropXv" class="debug-tt-val"></span></div>
+    <div class="debug-tt-row"><label>Zoom</label><input id="tt-zoom" type="range" min="0.8" max="1.8" step="0.01"><span id="tt-zoomv" class="debug-tt-val"></span></div>
+    <div class="debug-tt-row"><label>Сдвиг X</label><input id="tt-x" type="range" min="-80" max="80" step="1"><span id="tt-xv" class="debug-tt-val"></span></div>
+    <div class="debug-tt-row"><label>Сдвиг Y</label><input id="tt-y" type="range" min="-120" max="120" step="1"><span id="tt-yv" class="debug-tt-val"></span></div>
+    <div class="debug-tt-row"><label>Crop снизу</label><input id="tt-cropB" type="range" min="0" max="240" step="1"><span id="tt-cropBv" class="debug-tt-val"></span></div>
+
+    <div class="debug-tt-row">
+      <button id="tt-reset" class="debug-tt-btn wide">reset профиля</button>
+      <button id="tt-copy" class="debug-tt-btn wide">copy JSON</button>
+    </div>
+  `;
+
+  // insert above logs
+  panel.insertBefore(wrap, body);
+
+  const profSel = document.getElementById("tt-prof");
+  const cropX = document.getElementById("tt-cropX");
+  const zoom = document.getElementById("tt-zoom");
+  const x = document.getElementById("tt-x");
+  const y = document.getElementById("tt-y");
+  const cropB = document.getElementById("tt-cropB");
+
+  const vCropX = document.getElementById("tt-cropXv");
+  const vZoom = document.getElementById("tt-zoomv");
+  const vX = document.getElementById("tt-xv");
+  const vY = document.getElementById("tt-yv");
+  const vCropB = document.getElementById("tt-cropBv");
+
+  const fill = () => {
+    const profiles = loadTTProfiles();
+    const key = profSel.value;
+    const p = profiles[key] || TT_DEFAULTS.desktop;
+    cropX.value = String(p.cropX||0);
+    zoom.value = String(p.zoom||1);
+    x.value = String(p.x||0);
+    y.value = String(p.y||0);
+    cropB.value = String(p.cropBottom||0);
+    vCropX.textContent = `${cropX.value}px`;
+    vZoom.textContent = String(Number(zoom.value).toFixed(2));
+    vX.textContent = `${x.value}px`;
+    vY.textContent = `${y.value}px`;
+    vCropB.textContent = `${cropB.value}px`;
+  };
+
+  const commit = () => {
+    const profiles = loadTTProfiles();
+    const key = profSel.value;
+    profiles[key] = {
+      cropX: Number(cropX.value),
+      zoom: Number(zoom.value),
+      x: Number(x.value),
+      y: Number(y.value),
+      cropBottom: Number(cropB.value),
+    };
+    saveTTProfiles(profiles);
+    fill();
+    applyTTVars("controls");
+  };
+
+  profSel.addEventListener("change", () => { fill(); applyTTVars("profile-change"); });
+  [cropX, zoom, x, y, cropB].forEach(el => el.addEventListener("input", commit));
+
+  document.getElementById("tt-reset")?.addEventListener("click", () => {
+    const profiles = loadTTProfiles();
+    profiles[profSel.value] = { ...TT_DEFAULTS[profSel.value] };
+    saveTTProfiles(profiles);
+    fill();
+    applyTTVars("reset");
+  });
+  document.getElementById("tt-copy")?.addEventListener("click", async () => {
+    try{
+      const text = JSON.stringify(loadTTProfiles(), null, 2);
+      await navigator.clipboard.writeText(text);
+      pushDebug("tt:copy", "ok");
+      alert("Скопировано в буфер обмена");
+    }catch(e){
+      pushDebug("tt:copy", { error: String(e) });
+      alert("Не удалось скопировать. Открой DEBUG -> посмотри логи.");
+    }
+  });
+  document.getElementById("tt-force")?.addEventListener("click", () => {
+    setTTForcedProfileKey(profSel.value);
+    applyTTVars("force");
+  });
+  document.getElementById("tt-unforce")?.addEventListener("click", () => {
+    setTTForcedProfileKey("");
+    applyTTVars("auto");
+  });
+
+  // set initial profile dropdown to the auto (or forced) one
+  const profiles = loadTTProfiles();
+  const forced = getTTForcedProfileKey();
+  const auto = (forced && profiles[forced]) ? forced : getTTAutoProfileKey();
+  profSel.value = auto;
+  fill();
+  applyTTVars("init");
+}
+
+// Keep vars in sync if viewport/card size changes
+window.addEventListener("resize", () => applyTTVars("resize"));
+try{
+  window.matchMedia("(orientation: portrait)").addEventListener("change", () => applyTTVars("orientation"));
+}catch(e){}
+
+async function normalizeVideoLink(inputUrl){
   const rawUrl = String(inputUrl || "").trim();
   if(!rawUrl) return { url: rawUrl };
 
-  pushDebug("normalize-link", { in: rawUrl });
+  pushDebug("normalize:input", rawUrl);
 
   try{
-    // YouTube: convert to embed immediately (no server required)
+    // YouTube: pass through (renderMediaHTML handles embedding)
     if (/(youtube\.com|youtu\.be)/i.test(rawUrl)) {
-      const info = detectMediaType(rawUrl);
-      if (info.type === "youtube" && info.id) {
-        const out = `https://www.youtube.com/embed/${info.id}?rel=0&modestbranding=1`;
-        pushDebug("normalize-link", { ok: true, out, platform: "youtube" });
-        return { url: out, data: { ok: true, platform: "youtube" } };
+      pushDebug("normalize:youtube", rawUrl);
+      return { url: rawUrl };
+    }
+
+    // TikTok: try fast id extraction first
+    if (/tiktok\.com/i.test(rawUrl)) {
+      pushDebug("normalize:tiktok:detected", rawUrl);
+      const id =
+        rawUrl.match(/\/video\/(\d{10,})/i)?.[1] ||
+        rawUrl.match(/\/embed\/v2\/(\d{10,})/i)?.[1] ||
+        rawUrl.match(/[?&](?:item_id|share_item_id|aweme_id)=(\d{10,})/i)?.[1] ||
+        "";
+      if (id) {
+        const embedUrl = `https://www.tiktok.com/embed/v2/${id}`;
+        pushDebug("normalize:tiktok:direct_id", { id, embedUrl });
+        return { url: embedUrl, videoId: id, ok: true, fast: true };
       }
-      return { url: rawUrl };
+
+      // For vm/vt short links: ask server to resolve -> embed
+      pushDebug("normalize:tiktok:request", { endpoint: "/api/normalize-video-link", url: rawUrl });
+      const res = await fetch("/api/normalize-video-link", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: rawUrl }),
+      });
+      pushDebug("normalize:tiktok:response", { status: res.status, ok: res.ok });
+      const data = await res.json().catch(() => ({}));
+      pushDebug("normalize:tiktok:json", data);
+      if (data?.ok && data?.embedUrl) {
+        pushDebug("normalize:tiktok:out", { out: data.embedUrl, via: "server", videoId: data?.videoId || null });
+        return { url: data.embedUrl, data, ok: true };
+      }
+      // Fallback: try TikTok oEmbed directly from the browser (can help if server fetch is blocked)
+      try{
+        const oembedUrl = "https://www.tiktok.com/oembed?url=" + encodeURIComponent(rawUrl);
+        const o = await fetch(oembedUrl);
+        pushDebug("normalize:tiktok:oembed_resp", { status: o.status, ok: o.ok, oembedUrl });
+        const j = await o.json().catch(() => ({}));
+        pushDebug("normalize:tiktok:oembed_json", j);
+        const html = j && j.html ? String(j.html) : "";
+        const mm = html.match(/data-video-id=['"](\d{10,})['"]/i) || html.match(/embed\/v2\/(\d{10,})/i);
+        const vid = mm ? mm[1] : "";
+        if(vid){
+          const embedUrl = `https://www.tiktok.com/embed/v2/${vid}`;
+          pushDebug("normalize:tiktok:out", { out: embedUrl, via: "oembed", videoId: vid });
+          return { url: embedUrl, videoId: vid, ok: true, via: "oembed" };
+        }
+      }catch(e){
+        pushDebug("normalize:tiktok:oembed_error", String(e));
+      }
+
+      return { url: rawUrl, data, ok: false };
     }
 
-    // Not TikTok -> no normalize
-    if (!/tiktok\.com/i.test(rawUrl)) {
-      return { url: rawUrl };
-    }
-
-    // TikTok: if it's already a /video/<id> link, we can build embed without server
-    const info = detectMediaType(rawUrl);
-    if (info.type === "tiktok" && info.id) {
-      const out = `https://www.tiktok.com/embed/v2/${info.id}`;
-      pushDebug("normalize-link", { ok: true, out, id: info.id, platform: "tiktok-local" });
-      return { url: out, data: { ok: true, videoId: info.id, embedUrl: out, platform: "tiktok-local" } };
-    }
-
-    // Otherwise (short links /t/ / vm.tiktok.com) -> ask server to resolve via oEmbed
-    const res = await fetch("/api/normalize-video-link", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url: rawUrl }),
-    });
-
-    let data = null;
-    try{
-      data = await res.json();
-    }catch(_){
-      // non-json (e.g., 404 html) -> fallback to raw
-      pushDebug("normalize-link", { ok: false, status: res.status, note: "non-json response" });
-      return { url: rawUrl, data: { ok: false, status: res.status } };
-    }
-
-    const normalized = data?.embedUrl || data?.finalUrl || data?.browserUrl || rawUrl;
-    pushDebug("normalize-link", { ok: Boolean(data?.ok), out: normalized, id: data?.videoId || "" });
-
-    // If server returned a /video/<id> browser link, still convert to embed on client
-    const info2 = detectMediaType(normalized);
-    if (info2.type === "tiktok" && info2.id) {
-      const out = `https://www.tiktok.com/embed/v2/${info2.id}`;
-      return { url: out, data: { ...(data||{}), ok: true, videoId: info2.id, embedUrl: out } };
-    }
-
-    return { url: normalized, data };
+    pushDebug("normalize:non_tiktok", rawUrl);
+    return { url: rawUrl };
   }catch(e){
-    pushDebug("normalize-link", { error: String(e) });
-    return { url: rawUrl, data: { ok: false, error: String(e) } };
+    return { url: rawUrl, error: e };
   }
 }
 
 function setDebug(open){ $("debug-panel")?.classList.toggle("hidden", !open); }
 $("debug-toggle")?.addEventListener("click", () => setDebug($("debug-panel")?.classList.contains("hidden")));
 $("debug-close")?.addEventListener("click", () => setDebug(false));
+$("debug-copy")?.addEventListener("click", () => copyDebugToClipboard());
+$("debug-clear")?.addEventListener("click", () => clearDebug());
 if (new URLSearchParams(location.search).get("debug") === "1") setDebug(true);
+
+// Log environment once (helps understand why TikTok embeds may be blocked)
+pushDebug("env", {
+  href: location.href,
+  origin: location.origin,
+  referrer: document.referrer || "",
+  ua: navigator.userAgent,
+  inIframe: window.self !== window.top,
+  secure: window.isSecureContext,
+  dpr: window.devicePixelRatio,
+  viewport: { w: window.innerWidth, h: window.innerHeight },
+  screen: { w: screen.width, h: screen.height }
+});
+
+// Init TT controls + initial vars (will re-apply after embeds load/render)
+try{ initTTDebugControls(); }catch(e){}
+try{ applyTTVars("init"); }catch(e){}
+setTimeout(() => {
+  try{ applyTTVars("init:delayed"); }catch(e){}
+}, 0);
 
 // -------- Screen switching
 const screens = ["mode","host","player"].reduce((acc,k)=>{
@@ -469,15 +836,24 @@ $("player-send-meme")?.addEventListener("click", async () => {
   if(!playerState.joined){ $("player-join-status").textContent = "Сначала войди в комнату"; return; }
   const file = $("player-meme-file").files?.[0] || null;
   let url = "";
+  pushDebug("player:send:input", {
+    roomCode: playerState.roomCode,
+    hasFile: Boolean(file),
+    file: file ? { name: file.name, type: file.type, size: file.size } : null,
+    rawUrl: dbgValueShort($("player-meme-url")?.value || "")
+  });
   if(file){
     if(file.size > 8 * 1024 * 1024){ alert("Файл слишком большой. Лимит ~8MB."); return; }
     url = await fileToDataUrl(file);
+    pushDebug("player:send:file_read", dbgValueShort(url));
   }else{
     url = String($("player-meme-url").value || "").trim();
-    const normalized = await normalizeVideoLink(url); // PATCH: TikTok normalize
-    url = normalized.url || url; // PATCH: TikTok normalize
+    const normalized = await normalizeVideoLink(url);
+    pushDebug("player:send:normalized", { in: url, out: normalized.url || url, meta: normalized });
+    url = normalized.url || url;
   }
   const caption = String($("player-meme-caption").value || "").trim();
+  pushDebug("player:send:emit", { roomCode: playerState.roomCode, url: dbgValueShort(url), captionLen: caption.length });
   socket.emit("player-send-meme", { roomCode: playerState.roomCode, url, caption }, (res)=>{
     pushDebug("player-send-meme", res);
     if(!res?.ok){ alert(res?.error || "Ошибка отправки"); return; }
@@ -555,6 +931,9 @@ socket.on("room-status", (st) => {
   if (playerState.joined && st?.roomCode === playerState.roomCode){
     if (st.task) $("player-task").textContent = st.task;
   }
+
+  // After any UI update, ensure TikTok transforms are re-applied (cards may have different sizes)
+  try{ applyTTVars("room-status"); }catch(e){}
 });
 
 socket.on("round-task", (p) => {
@@ -596,6 +975,9 @@ socket.on("voting-started", ({ roomCode, memes }) => {
       el.appendChild(btn);
       box.appendChild(el);
     });
+
+    // Apply TT vars after rendering the voting grid
+    try{ applyTTVars("voting-started"); }catch(e){}
   }
 });
 

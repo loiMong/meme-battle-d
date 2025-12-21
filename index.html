@@ -101,7 +101,7 @@
 
         <div class="panel">
           <h3>Отправь мем</h3>
-          <label>Ссылка на картинку/GIF/видео (TikTok/YouTube):
+          <label>Ссылка на картинку/GIF:
             <input id="player-meme-url" placeholder="https://..." autocomplete="off"/>
           </label>
 
@@ -137,63 +137,12 @@
   <div id="debug-panel" class="debug hidden">
     <div class="debug-head">
       <b>DEBUG</b>
+      <div class="debug-actions">
+        <button id="debug-copy" class="ghost">Copy</button>
+        <button id="debug-clear" class="ghost">Clear</button>
+      </div>
       <button id="debug-close" class="ghost">×</button>
     </div>
-    
-    <div class="debug-section">
-      <div class="debug-title">TikTok плеер — обрезка/zoom/сдвиг</div>
-
-      <label class="tt-row">
-        <input id="tt-video-only" type="checkbox" checked />
-        <span>Только видео (кроп)</span>
-      </label>
-
-      <label class="tt-row">
-        <span>Профиль устройства</span>
-        <select id="tt-profile">
-          <option value="desktop">ПК / большой экран</option>
-          <option value="mobilePortrait">Мобилка — вертикаль</option>
-          <option value="mobileLandscape">Мобилка — горизонталь</option>
-        </select>
-      </label>
-
-      <label class="tt-row">
-        <span>Обрезка по бокам (px)</span>
-        <input id="tt-crop-x" type="range" min="0" max="60" step="1" value="0" />
-        <span class="tt-val" id="tt-crop-x-val">0</span>
-      </label>
-
-      <label class="tt-row">
-        <span>Zoom (масштаб)</span>
-        <input id="tt-zoom" type="range" min="0.80" max="1.60" step="0.01" value="1.00" />
-        <span class="tt-val" id="tt-zoom-val">1.00</span>
-      </label>
-
-      <label class="tt-row">
-        <span>Сдвиг X (px)</span>
-        <input id="tt-x" type="range" min="-30" max="30" step="1" value="0" />
-        <span class="tt-val" id="tt-x-val">0</span>
-      </label>
-
-      <label class="tt-row">
-        <span>Сдвиг Y (px)</span>
-        <input id="tt-y" type="range" min="-60" max="60" step="1" value="0" />
-        <span class="tt-val" id="tt-y-val">0</span>
-      </label>
-
-      <label class="tt-row">
-        <span>Crop снизу (px)</span>
-        <input id="tt-crop-bottom" type="range" min="0" max="220" step="1" value="0" />
-        <span class="tt-val" id="tt-crop-bottom-val">0</span>
-      </label>
-
-      <div class="tt-actions">
-        <button id="tt-reset" class="ghost" type="button">Сбросить профиль</button>
-        <button id="tt-copy" class="ghost" type="button">Скопировать настройки</button>
-        <span class="muted" id="tt-active"></span>
-      </div>
-    </div>
-
     <div id="debug-body" class="debug-body"></div>
   </div>
 

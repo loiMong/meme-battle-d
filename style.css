@@ -8,6 +8,13 @@
   --border:rgba(255,255,255,0.12);
   --primary:#5a7bff;
   --danger:#ff4d6d;
+
+  /* TikTok embed transform defaults */
+  --ttCropX: 0px;
+  --ttZoom: 1;
+  --ttX: 0px;
+  --ttY: 0px;
+  --ttCropBottom: 0px;
 }
 
 *{ box-sizing:border-box; }
@@ -190,6 +197,13 @@ textarea{ resize: vertical; min-height: 120px; }
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
 }
+.debug-actions{
+  display:flex;
+  gap: 8px;
+  align-items:center;
+  margin-left:auto;
+  margin-right: 8px;
+}
 .debug-body{
   padding: 10px 12px;
   overflow:auto;
@@ -201,13 +215,27 @@ textarea{ resize: vertical; min-height: 120px; }
 .dbg .t{ color: rgba(233,236,255,0.55); margin-right: 6px; }
 .dbg .d{ color: rgba(233,236,255,0.75); }
 
+.debug-tt{
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.12);
+}
+.debug-tt-title{ font-size: 12px; font-weight: 700; margin-bottom: 8px; }
+.debug-tt-row{ display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.debug-tt-row label{ width: 120px; font-size: 12px; color: rgba(233,236,255,0.72); }
+.debug-tt-row input[type=range]{ flex: 1; }
+.debug-tt-select{ flex: 1; background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 6px 10px; }
+.debug-tt-val{ width: 52px; text-align: right; font-size: 12px; color: rgba(233,236,255,0.72); }
+.debug-tt-btn{ background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: var(--text); border-radius: 10px; padding: 6px 10px; }
+.debug-tt .small{ font-size: 11px; color: rgba(233,236,255,0.55); }
+
 .offline{opacity:0.6; font-size:12px; margin-left:6px;}
 
-/* === PATCH: no-crop media frames (YT vs TikTok different) === */
+/* === Media frames === */
 .meme .mediaFrame{
   width: 100%;
   height: auto;
-  overflow: visible; /* IMPORTANT: do not crop TikTok UI */
+  overflow: visible;
   border-radius: 14px;
   border: 1px solid rgba(255,255,255,0.10);
   background: rgba(0,0,0,0.18);
@@ -237,12 +265,32 @@ textarea{ resize: vertical; min-height: 120px; }
   border: 0;
 }
 
-/* TikTok: let the embed decide its own height; no absolute positioning, no crop */
-.meme .mediaFrame.ttFrame iframe{
+/* TikTok: crop/zoom inside a fixed 9:16 viewport (per-device profiles via CSS vars) */
+.meme .mediaFrame.ttFrame{
+  background: #000;
+  padding: 0;
+}
+.meme .mediaFrame.ttFrame .ttViewport{
+  position: relative;
   width: 100%;
-  height: min(70vh, 820px); /* tall enough for TikTok player UI */
+  aspect-ratio: 9 / 16;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #000;
+}
+.meme .mediaFrame.ttFrame .ttViewport iframe{
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  /* Expand so cropping doesn't show background on the sides */
+  width: calc(100% + (var(--ttCropX, 0px) * 2));
+  height: calc(100% + var(--ttCropBottom, 0px));
   border: 0;
   display: block;
+  transform-origin: center center;
+  transform:
+    translate(calc(-50% + var(--ttX, 0px)), calc(-50% + var(--ttY, 0px)))
+    scale(var(--ttZoom, 1));
 }
 
 /* If previous patches forced fixed heights/aspect for generic wrappers, neutralize them */
@@ -258,97 +306,3 @@ textarea{ resize: vertical; min-height: 120px; }
   overflow: visible !important;
 }
 /* === END PATCH === */
-
-
-/* === TikTok crop controls (per-device profiles) === */
-:root{
-  --tt-crop-x: 0px;
-  --tt-crop-bottom: 0px;
-  --tt-zoom: 1;
-  --tt-x: 0px;
-  --tt-y: 0px;
-}
-
-/* Base TikTok wrapper */
-.meme .mediaFrame.ttFrame{
-  position: relative;
-  overflow: hidden;
-  background: rgba(0,0,0,0.18);
-}
-
-.meme .mediaFrame.ttFrame .ttViewport{
-  width: 100%;
-  height: 100%;
-}
-
-/* VIDEO-ONLY mode (cropped) */
-.tt-video-only .meme .mediaFrame.ttFrame{
-  aspect-ratio: 9 / 16;
-  max-height: 78vh;
-}
-
-.tt-video-only .meme .mediaFrame.ttFrame .ttViewport{
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  clip-path: inset(0 var(--tt-crop-x) var(--tt-crop-bottom) var(--tt-crop-x));
-}
-
-.tt-video-only .meme .mediaFrame.ttFrame .ttViewport iframe{
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  transform: translate(var(--tt-x), var(--tt-y)) scale(var(--tt-zoom));
-  transform-origin: 50% 0%;
-}
-
-/* FULL UI mode (no crop): show the embed tall */
-:not(.tt-video-only) .meme .mediaFrame.ttFrame .ttViewport{
-  position: relative;
-  clip-path: none;
-}
-
-:not(.tt-video-only) .meme .mediaFrame.ttFrame .ttViewport iframe{
-  width: 100%;
-  height: min(70vh, 820px);
-  border: 0;
-  display: block;
-}
-
-/* Debug TikTok controls */
-.debug-section{
-  padding: 10px 10px 12px;
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 12px;
-  background: rgba(0,0,0,0.16);
-  margin-bottom: 10px;
-}
-.debug-title{ font-weight: 700; margin-bottom: 8px; }
-
-.tt-row{
-  display: grid;
-  grid-template-columns: 170px 1fr 52px;
-  gap: 10px;
-  align-items: center;
-  margin: 8px 0;
-}
-.tt-row input[type="checkbox"]{ width: 18px; height: 18px; }
-.tt-row select{ width: 100%; }
-.tt-row span{ color: rgba(233,236,255,0.9); }
-.tt-val{ text-align: right; color: rgba(233,236,255,0.8); font-variant-numeric: tabular-nums; }
-
-.tt-actions{
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
-
-@media (max-width: 720px){
-  .tt-row{ grid-template-columns: 1fr; }
-  .tt-val{ text-align: left; }
-}
-/* === END TikTok crop controls === */
