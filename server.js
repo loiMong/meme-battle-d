@@ -33,75 +33,81 @@ function extractTikTokId(url){
   }
 }
 
-async function tryTikTokOEmbed(inputUrl){
+async function tryTikTokOEmbed(inputUrl, timeoutMs = 6000){
   // TikTok oEmbed: returns JSON with `html` that contains embed code with video id
   const api = "https://www.tiktok.com/oembed?url=" + encodeURIComponent(inputUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const r = await fetch(api, {
     headers: {
       "user-agent": "Mozilla/5.0",
       "accept": "application/json,text/plain,*/*"
-    }
+    },
+    signal: controller.signal
   });
+  clearTimeout(timer);
   if(!r.ok) return null;
   const j = await r.json();
   const html = j && j.html ? String(j.html) : "";
-  const m = html.match(/embed\/v2\/(\d+)/) || html.match(/data-video-id=['"](\d+)['"]/);
+  const m = html.match(/data-video-id=['"](\d+)['"]/) || html.match(/embed\/v2\/(\d+)/);
   const videoId = m ? m[1] : null;
   return { videoId, html };
 }
 
 app.post("/api/normalize-video-link", async (req, res) => {
+  const inputUrl = String(req.body?.url || "").trim();
   try{
-    const inputUrl = String(req.body?.url || "").trim();
-    if(!inputUrl) return res.status(400).json({ ok:false, error:"url is required" });
+    if(!inputUrl) {
+      return res.status(400).json({ ok:false, reason:"url is required", inputUrl });
+    }
 
     // Quick pass-through for non-http
     if(!/^https?:\/\//i.test(inputUrl)){
-      return res.json({ ok:true, inputUrl, finalUrl: inputUrl, embedUrl: inputUrl, hops: 0 });
+      return res.json({ ok:false, reason:"non-http url", finalUrl: inputUrl });
     }
 
     // TikTok
     if(/tiktok\.com/i.test(inputUrl)){
-      let finalUrl = inputUrl;
-      let videoId = extractTikTokId(finalUrl);
+      const finalUrl = inputUrl;
+      let videoId = extractTikTokId(inputUrl);
 
-      // try oEmbed (best for vm.tiktok redirects too)
-      if(!videoId){
+      if (!videoId && /(vm\.tiktok\.com|vt\.tiktok\.com|\/t\/)/i.test(inputUrl)) {
         try{
           const o = await tryTikTokOEmbed(inputUrl);
-          if(o?.videoId) videoId = o.videoId;
-        }catch(e){}
-      }
-
-      // try resolve redirects as fallback
-      if(!videoId && /vm\.tiktok\.com|vt\.tiktok\.com/i.test(inputUrl)){
-        try{
-          const r = await fetch(inputUrl, {
-            redirect: "follow",
-            headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,*/*" }
+          if (o?.videoId) videoId = o.videoId;
+        }catch(e){
+          return res.json({
+            ok: false,
+            inputUrl,
+            finalUrl,
+            reason: "oembed_failed"
           });
-          if(r?.url) finalUrl = r.url;
-          videoId = extractTikTokId(finalUrl) || videoId;
-        }catch(e){}
+        }
       }
 
-      const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}` : inputUrl;
+      if (!videoId) {
+        return res.json({
+          ok: false,
+          inputUrl,
+          finalUrl,
+          reason: "video_id_not_found"
+        });
+      }
 
       return res.json({
         ok: true,
         inputUrl,
         finalUrl,
-        videoId: videoId || null,
-        embedUrl,
-        hops: 1
+        videoId,
+        embedUrl: `https://www.tiktok.com/embed/v2/${videoId}`
       });
     }
 
     // YouTube: nothing special needed (front-end embeds itself), just echo
-    return res.json({ ok:true, inputUrl, finalUrl: inputUrl, embedUrl: inputUrl, hops: 0 });
+    return res.json({ ok:false, reason:"not_tiktok", finalUrl: inputUrl });
 
   }catch(err){
-    return res.status(500).json({ ok:false, error: String(err?.message || err) });
+    return res.status(500).json({ ok:false, reason: String(err?.message || err), finalUrl: inputUrl });
   }
 });
 // --- End normalize ---

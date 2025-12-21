@@ -72,12 +72,23 @@ function renderMediaHTML(url){
   }
 
   // TikTok: per-device crop/zoom profiles (see DEBUG panel)
-  if (meta.type === "tiktok") {
+  if (info.type === "tiktok") {
+    const embedUrl = (info.url || "").startsWith("https://www.tiktok.com/embed/")
+      ? info.url
+      : "";
+    if (!embedUrl) {
+      return `
+        <div class="mediaFrame">
+          <div class="muted">TikTok ссылку нельзя встроить</div>
+          <a class="ghost" href="${String(info.url || "")}" target="_blank" rel="noopener">Открыть в TikTok</a>
+        </div>
+      `;
+    }
     return `
       <div class="mediaFrame ttFrame">
         <div class="ttViewport">
           <iframe
-            src="${meta.embedUrl}"
+            src="${embedUrl}"
             loading="lazy"
             allowfullscreen
             referrerpolicy="no-referrer-when-downgrade"
@@ -129,7 +140,6 @@ function pushDebug(tag, detail){
   row.innerHTML = `<span class="t">[${now()}]</span> <b>${tag}</b> <span class="d">${typeof detail === "string" ? detail : safeJson(detail)}</span>`;
   body.prepend(row);
 }
-async 
 // ===== TikTok player profiles (per-device) =====
 const LS_TT = "tt_profiles_v1";
 const LS_TT_MODE = "tt_video_only_v1";
@@ -315,6 +325,7 @@ async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
   if(!rawUrl) return { url: rawUrl };
   pushDebug("normalize-link", { in: rawUrl });
   try{
+    console.debug("[normalize-link] input", rawUrl);
     if (/(youtube\.com|youtu\.be)/i.test(rawUrl)) {
       const info = detectMediaType(rawUrl);
       if (info.type === "youtube" && info.id) {
@@ -322,20 +333,29 @@ async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
       }
       return { url: rawUrl };
     }
-    if (!/tiktok\.com/i.test(rawUrl)) {
-      return { url: rawUrl };
+    if (/tiktok\.com/i.test(rawUrl)) {
+      const directId = rawUrl.match(/\/video\/(\d+)/i)?.[1] || rawUrl.match(/\/embed\/v2\/(\d+)/i)?.[1] || "";
+      if (directId) {
+        const embedUrl = `https://www.tiktok.com/embed/v2/${directId}`;
+        console.debug("[normalize-link] tiktok-fast", { videoId: directId, embedUrl });
+        pushDebug("normalize-link", { ok: true, out: embedUrl, id: directId });
+        return { url: embedUrl };
+      }
+      const res = await fetch("/api/normalize-video-link", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: rawUrl }),
+      });
+      const data = await res.json();
+      const normalized = data?.ok ? data?.embedUrl : rawUrl;
+      console.debug("[normalize-link] tiktok", { ok: data?.ok, videoId: data?.videoId, embedUrl: data?.embedUrl, reason: data?.reason });
+      pushDebug("normalize-link", { ok: data?.ok, out: normalized, id: data?.videoId || "" });
+      return { url: normalized, data };
     }
-    const res = await fetch("/api/normalize-video-link", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url: rawUrl }),
-    });
-    const data = await res.json();
-    const normalized = data?.embedUrl || data?.finalUrl || data?.browserUrl || rawUrl;
-    pushDebug("normalize-link", { ok: data?.ok, out: normalized, id: data?.videoId || "" });
-    return { url: normalized, data };
+    return { url: rawUrl };
   }catch(e){
     pushDebug("normalize-link", { error: String(e) });
+    console.debug("[normalize-link] error", String(e));
     return { url: rawUrl, error: e };
   }
 }
