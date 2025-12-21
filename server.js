@@ -58,7 +58,7 @@ app.post("/api/normalize-video-link", async (req, res) => {
   const inputUrl = String(req.body?.url || "").trim();
   try{
     if(!inputUrl) {
-      return res.status(400).json({ ok:false, reason:"url is required", inputUrl });
+      return res.status(400).json({ ok:false, reason:"url is required" });
     }
 
     // Quick pass-through for non-http
@@ -68,19 +68,17 @@ app.post("/api/normalize-video-link", async (req, res) => {
 
     // TikTok
     if(/tiktok\.com/i.test(inputUrl)){
-      const finalUrl = inputUrl;
       let videoId = extractTikTokId(inputUrl);
 
-      if (!videoId && /(vm\.tiktok\.com|vt\.tiktok\.com|\/t\/)/i.test(inputUrl)) {
+      if (!videoId) {
         try{
           const o = await tryTikTokOEmbed(inputUrl);
           if (o?.videoId) videoId = o.videoId;
         }catch(e){
           return res.json({
             ok: false,
-            inputUrl,
-            finalUrl,
-            reason: "oembed_failed"
+            reason: "oembed_failed",
+            finalUrl: inputUrl
           });
         }
       }
@@ -88,16 +86,13 @@ app.post("/api/normalize-video-link", async (req, res) => {
       if (!videoId) {
         return res.json({
           ok: false,
-          inputUrl,
-          finalUrl,
-          reason: "video_id_not_found"
+          reason: "video_id_not_found",
+          finalUrl: inputUrl
         });
       }
 
       return res.json({
         ok: true,
-        inputUrl,
-        finalUrl,
         videoId,
         embedUrl: `https://www.tiktok.com/embed/v2/${videoId}`
       });
