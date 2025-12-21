@@ -33,15 +33,19 @@ function extractTikTokId(url){
   }
 }
 
-async function tryTikTokOEmbed(inputUrl){
+async function tryTikTokOEmbed(inputUrl, timeoutMs = 6000){
   // TikTok oEmbed: returns JSON with `html` that contains embed code with video id
   const api = "https://www.tiktok.com/oembed?url=" + encodeURIComponent(inputUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const r = await fetch(api, {
     headers: {
       "user-agent": "Mozilla/5.0",
       "accept": "application/json,text/plain,*/*"
-    }
+    },
+    signal: controller.signal
   });
+  clearTimeout(timer);
   if(!r.ok) return null;
   const j = await r.json();
   const html = j && j.html ? String(j.html) : "";
@@ -51,13 +55,15 @@ async function tryTikTokOEmbed(inputUrl){
 }
 
 app.post("/api/normalize-video-link", async (req, res) => {
+  const inputUrl = String(req.body?.url || "").trim();
   try{
-    const inputUrl = String(req.body?.url || "").trim();
-    if(!inputUrl) return res.status(400).json({ ok:false, error:"url is required" });
+    if(!inputUrl) {
+      return res.status(400).json({ ok:false, error:"url is required", status: 400, inputUrl });
+    }
 
     // Quick pass-through for non-http
     if(!/^https?:\/\//i.test(inputUrl)){
-      return res.json({ ok:true, inputUrl, finalUrl: inputUrl, embedUrl: inputUrl, hops: 0 });
+      return res.json({ ok:true, inputUrl, finalUrl: inputUrl, videoId: null, embedUrl: inputUrl, status: 200, error: null });
     }
 
     // TikTok
@@ -65,43 +71,67 @@ app.post("/api/normalize-video-link", async (req, res) => {
       let finalUrl = inputUrl;
       let videoId = extractTikTokId(finalUrl);
 
+      // direct id from video or embed urls
+      if (!videoId) {
+        const directId = extractTikTokId(inputUrl);
+        if (directId) videoId = directId;
+      }
+
       // try oEmbed (best for vm.tiktok redirects too)
       if(!videoId){
         try{
           const o = await tryTikTokOEmbed(inputUrl);
           if(o?.videoId) videoId = o.videoId;
-        }catch(e){}
-      }
-
-      // try resolve redirects as fallback
-      if(!videoId && /vm\.tiktok\.com|vt\.tiktok\.com/i.test(inputUrl)){
-        try{
-          const r = await fetch(inputUrl, {
-            redirect: "follow",
-            headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,*/*" }
+        }catch(e){
+          return res.status(502).json({
+            ok: false,
+            inputUrl,
+            finalUrl,
+            videoId: null,
+            embedUrl: inputUrl,
+            status: 502,
+            error: "oEmbed failed"
           });
-          if(r?.url) finalUrl = r.url;
-          videoId = extractTikTokId(finalUrl) || videoId;
-        }catch(e){}
+        }
       }
 
-      const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}` : inputUrl;
+      if (videoId) {
+        const embedUrl = `https://www.tiktok.com/embed/v2/${videoId}`;
+        return res.json({
+          ok: true,
+          inputUrl,
+          finalUrl,
+          videoId,
+          embedUrl,
+          status: 200,
+          error: null
+        });
+      }
 
-      return res.json({
-        ok: true,
+      return res.status(422).json({
+        ok: false,
         inputUrl,
         finalUrl,
-        videoId: videoId || null,
-        embedUrl,
-        hops: 1
+        videoId: null,
+        embedUrl: inputUrl,
+        status: 422,
+        error: "Video ID not found"
       });
     }
 
     // YouTube: nothing special needed (front-end embeds itself), just echo
-    return res.json({ ok:true, inputUrl, finalUrl: inputUrl, embedUrl: inputUrl, hops: 0 });
+    return res.json({ ok:true, inputUrl, finalUrl: inputUrl, videoId: null, embedUrl: inputUrl, status: 200, error: null });
 
   }catch(err){
-    return res.status(500).json({ ok:false, error: String(err?.message || err) });
+    return res.status(500).json({
+      ok:false,
+      inputUrl,
+      finalUrl: inputUrl,
+      videoId: null,
+      embedUrl: inputUrl,
+      status: 500,
+      error: String(err?.message || err)
+    });
   }
 });
 // --- End normalize ---
