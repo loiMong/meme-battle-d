@@ -8,7 +8,8 @@ const $ = (id) => document.getElementById(id);
 
 /* === Media helpers: render without cropping; different approach for YT vs TikTok === */
 function detectMediaType(url){
-  const u = String(url || "").trim();
+  const input = url && typeof url === "object" ? url : { url };
+  const u = String(input.embedUrl || input.url || "").trim();
   if(!u) return { type: "empty" };
 
   // Data URLs
@@ -40,7 +41,7 @@ function detectMediaType(url){
     const m2 = u.match(/\/embed\/v2\/(\d+)/i);
     const m3 = u.match(/\/embed\/(\d+)/i);
     const id = (m1 && m1[1]) || (m2 && m2[1]) || (m3 && m3[1]) || "";
-    return { type: "tiktok", id, url: u };
+    return { type: "tiktok", id, url: u, embedUrl: input.embedUrl ? String(input.embedUrl) : "" };
   }
 
   // File extensions
@@ -73,8 +74,9 @@ function renderMediaHTML(url){
 
   // TikTok: per-device crop/zoom profiles (see DEBUG panel)
   if (info.type === "tiktok") {
-    const embedUrl = (info.url || "").startsWith("https://www.tiktok.com/embed/")
-      ? info.url
+    const embedUrlRaw = String(info.embedUrl || info.url || "");
+    const embedUrl = embedUrlRaw.startsWith("https://www.tiktok.com/embed/")
+      ? embedUrlRaw
       : "";
     if (!embedUrl) {
       return `
@@ -321,17 +323,14 @@ function bindTTControls(){
 // ===== END TikTok profiles =====
 
 async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
+  // ВАЖНО: эта функция возвращает строку.
   const rawUrl = String(inputUrl || "").trim();
-  if(!rawUrl) return { url: rawUrl };
+  if(!rawUrl) return rawUrl;
   pushDebug("normalize-link", { in: rawUrl });
   try{
     console.debug("[normalize-link] input", rawUrl);
     if (/(youtube\.com|youtu\.be)/i.test(rawUrl)) {
-      const info = detectMediaType(rawUrl);
-      if (info.type === "youtube" && info.id) {
-        return { url: `https://www.youtube.com/embed/${info.id}?rel=0&modestbranding=1` };
-      }
-      return { url: rawUrl };
+      return rawUrl;
     }
     if (/tiktok\.com/i.test(rawUrl)) {
       const directId = rawUrl.match(/\/video\/(\d+)/i)?.[1] || rawUrl.match(/\/embed\/v2\/(\d+)/i)?.[1] || "";
@@ -339,24 +338,28 @@ async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
         const embedUrl = `https://www.tiktok.com/embed/v2/${directId}`;
         console.debug("[normalize-link] tiktok-fast", { videoId: directId, embedUrl });
         pushDebug("normalize-link", { ok: true, out: embedUrl, id: directId });
-        return { url: embedUrl };
+        return embedUrl;
       }
       const res = await fetch("/api/normalize-video-link", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ url: rawUrl }),
       });
+      if (!res.ok) {
+        pushDebug("normalize-link", { ok: false, reason: `http_${res.status}` });
+        return rawUrl;
+      }
       const data = await res.json();
-      const normalized = data?.ok ? data?.embedUrl : rawUrl;
+      const normalized = (data?.ok && data?.embedUrl) ? data.embedUrl : rawUrl;
       console.debug("[normalize-link] tiktok", { ok: data?.ok, videoId: data?.videoId, embedUrl: data?.embedUrl, reason: data?.reason });
       pushDebug("normalize-link", { ok: data?.ok, out: normalized, id: data?.videoId || "" });
-      return { url: normalized, data };
+      return normalized;
     }
-    return { url: rawUrl };
+    return rawUrl;
   }catch(e){
     pushDebug("normalize-link", { error: String(e) });
     console.debug("[normalize-link] error", String(e));
-    return { url: rawUrl, error: e };
+    return rawUrl;
   }
 }
 function setDebug(open){ $("debug-panel")?.classList.toggle("hidden", !open); }
@@ -650,7 +653,7 @@ $("player-send-meme")?.addEventListener("click", async () => {
   }else{
     url = String($("player-meme-url").value || "").trim();
     const normalized = await normalizeVideoLink(url); // PATCH: TikTok normalize
-    url = normalized.url || url; // PATCH: TikTok normalize
+    url = normalized || url; // PATCH: TikTok normalize
   }
   const caption = String($("player-meme-caption").value || "").trim();
   socket.emit("player-send-meme", { roomCode: playerState.roomCode, url, caption }, (res)=>{

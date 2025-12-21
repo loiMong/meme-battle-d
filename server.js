@@ -68,27 +68,31 @@ app.post("/api/normalize-video-link", async (req, res) => {
 
     // TikTok
     if(/tiktok\.com/i.test(inputUrl)){
+      let finalUrl = inputUrl;
       let videoId = extractTikTokId(inputUrl);
 
-      if (!videoId) {
+      if (!videoId && /(vm\.tiktok\.com|vt\.tiktok\.com|\/t\/)/i.test(inputUrl)) {
         try{
           const o = await tryTikTokOEmbed(inputUrl);
           if (o?.videoId) videoId = o.videoId;
         }catch(e){
-          return res.json({
-            ok: false,
-            reason: "oembed_failed",
-            finalUrl: inputUrl
-          });
+          // ignore and try redirects next
+        }
+
+        if (!videoId) {
+          try{
+            const r = await fetch(inputUrl, {
+              redirect: "follow",
+              headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,*/*" }
+            });
+            if (r?.url) finalUrl = r.url;
+            videoId = extractTikTokId(finalUrl) || videoId;
+          }catch(e){}
         }
       }
 
       if (!videoId) {
-        return res.json({
-          ok: false,
-          reason: "video_id_not_found",
-          finalUrl: inputUrl
-        });
+        return res.json({ ok:false, reason:"video_id_not_found", finalUrl });
       }
 
       return res.json({
