@@ -71,28 +71,16 @@ function renderMediaHTML(url){
     `;
   }
 
-  // TikTok: per-device crop/zoom profiles (see DEBUG panel)
-  if (info.type === "tiktok") {
-    const embedUrl = /\/embed\//i.test(info.url || "")
-      ? info.url
-      : info.id
-        ? `https://www.tiktok.com/embed/v2/${info.id}`
-        : info.url;
+  // TikTok: DO NOT crop. Use their embed iframe (it contains UI), let it define height.
+  if(info.type === "tiktok"){
+    // If we got an id, use embed v2 (more stable). Otherwise fallback to link.
+    const src = info.id ? `https://www.tiktok.com/embed/v2/${info.id}` : info.url;
     return `
       <div class="mediaFrame ttFrame">
-        <div class="ttViewport">
-          <iframe
-            src="${embedUrl}"
-            loading="lazy"
-            allowfullscreen
-            referrerpolicy="no-referrer-when-downgrade"
-            allow="autoplay; encrypted-media"
-          ></iframe>
-        </div>
+        <iframe src="${src}" scrolling="no" allow="encrypted-media; picture-in-picture" allowfullscreen></iframe>
       </div>
     `;
   }
-
 
   // Video (uploaded as data URL or direct url): do not crop, keep contain
   if(info.type === "video_data" || info.type === "video_url"){
@@ -134,225 +122,74 @@ function pushDebug(tag, detail){
   row.innerHTML = `<span class="t">[${now()}]</span> <b>${tag}</b> <span class="d">${typeof detail === "string" ? detail : safeJson(detail)}</span>`;
   body.prepend(row);
 }
-// ===== TikTok player profiles (per-device) =====
-const LS_TT = "tt_profiles_v1";
-const LS_TT_MODE = "tt_video_only_v1";
-const LS_TT_FORCED = "tt_forced_profile_v1";
-
-const TT_DEFAULTS = {
-  desktop:         { cropX: 0, zoom: 1.30, x: 6,  y: -2, cropBottom: 0 },
-  mobilePortrait:  { cropX: 0, zoom: 1.00, x: 0,  y: 0,  cropBottom: 0 },
-  mobileLandscape: { cropX: 0, zoom: 1.00, x: 0,  y: 0,  cropBottom: 0 }
-};
-
-function cloneTTDefaults(){
-  return {
-    desktop: { ...TT_DEFAULTS.desktop },
-    mobilePortrait: { ...TT_DEFAULTS.mobilePortrait },
-    mobileLandscape: { ...TT_DEFAULTS.mobileLandscape }
-  };
-}
-
-function loadTTProfiles(){
-  try{
-    const raw = localStorage.getItem(LS_TT);
-    if(!raw) return cloneTTDefaults();
-    const data = JSON.parse(raw);
-    return {
-      desktop:         { ...TT_DEFAULTS.desktop,         ...(data.desktop||{}) },
-      mobilePortrait:  { ...TT_DEFAULTS.mobilePortrait,  ...(data.mobilePortrait||{}) },
-      mobileLandscape: { ...TT_DEFAULTS.mobileLandscape, ...(data.mobileLandscape||{}) }
-    };
-  }catch(e){
-    return cloneTTDefaults();
-  }
-}
-
-function saveTTProfiles(p){ localStorage.setItem(LS_TT, JSON.stringify(p)); }
-
-function loadVideoOnly(){
-  const raw = localStorage.getItem(LS_TT_MODE);
-  if(raw === null) return true; // default ON
-  return raw === "1";
-}
-function saveVideoOnly(v){ localStorage.setItem(LS_TT_MODE, v ? "1" : "0"); }
-
-let ttProfiles = loadTTProfiles();
-let ttVideoOnly = loadVideoOnly();
-
-function autoTTProfileKey(){
-  const w = window.innerWidth || 1024;
-  const isPortrait = window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
-  const isMobile = w <= 820; // heuristic
-  if(!isMobile) return "desktop";
-  return isPortrait ? "mobilePortrait" : "mobileLandscape";
-}
-
-function getActiveTTProfileKey(){
-  return localStorage.getItem(LS_TT_FORCED) || autoTTProfileKey();
-}
-
-function applyTTVars(){
-  const key = getActiveTTProfileKey();
-  const p = ttProfiles[key] || TT_DEFAULTS.desktop;
-  const root = document.documentElement;
-
-  root.style.setProperty("--tt-crop-x", `${p.cropX||0}px`);
-  root.style.setProperty("--tt-crop-bottom", `${p.cropBottom||0}px`);
-  root.style.setProperty("--tt-zoom", String(p.zoom||1));
-  root.style.setProperty("--tt-x", `${p.x||0}px`);
-  root.style.setProperty("--tt-y", `${p.y||0}px`);
-
-  root.classList.toggle("tt-video-only", !!ttVideoOnly);
-
-  const active = $("tt-active");
-  if(active){
-    active.textContent = `Активный: ${key} | cropX:${p.cropX||0}px | zoom:${Number(p.zoom||1).toFixed(2)} | x:${p.x||0}px | y:${p.y||0}px | низ:${p.cropBottom||0}px`;
-  }
-}
-
-function bindTTControls(){
-  const elMode = $("tt-video-only");
-  const elProfile = $("tt-profile");
-  if(!elProfile || !elMode){
-    applyTTVars();
-    return;
-  }
-
-  elMode.checked = !!ttVideoOnly;
-
-  // init profile selector (forced or auto)
-  elProfile.value = getActiveTTProfileKey();
-
-  function setVal(id, v){
-    const out = $(id + "-val");
-    if(out) out.textContent = String(v);
-  }
-
-  function syncUIFromProfile(key){
-    const p = ttProfiles[key] || TT_DEFAULTS.desktop;
-
-    $("tt-crop-x").value = String(p.cropX||0);
-    $("tt-zoom").value = String(p.zoom||1);
-    $("tt-x").value = String(p.x||0);
-    $("tt-y").value = String(p.y||0);
-    $("tt-crop-bottom").value = String(p.cropBottom||0);
-
-    setVal("tt-crop-x", p.cropX||0);
-    setVal("tt-zoom", Number(p.zoom||1).toFixed(2));
-    setVal("tt-x", p.x||0);
-    setVal("tt-y", p.y||0);
-    setVal("tt-crop-bottom", p.cropBottom||0);
-  }
-
-  syncUIFromProfile(elProfile.value);
-
-  elMode.addEventListener("change", () => {
-    ttVideoOnly = !!elMode.checked;
-    saveVideoOnly(ttVideoOnly);
-    applyTTVars();
-  });
-
-  elProfile.addEventListener("change", () => {
-    const key = elProfile.value;
-    localStorage.setItem(LS_TT_FORCED, key);
-    syncUIFromProfile(key);
-    applyTTVars();
-  });
-
-  function onSlider(id, field, format){
-    const input = $(id);
-    if(!input) return;
-    input.addEventListener("input", () => {
-      const key = elProfile.value;
-      const p = ttProfiles[key] || (ttProfiles[key] = { ...TT_DEFAULTS[key] });
-      const val = (field === "zoom") ? Number(input.value) : Number(input.value);
-      p[field] = val;
-      saveTTProfiles(ttProfiles);
-      setVal(id, format ? format(val) : val);
-      applyTTVars();
-    });
-  }
-
-  onSlider("tt-crop-x", "cropX");
-  onSlider("tt-zoom", "zoom", (v)=>Number(v).toFixed(2));
-  onSlider("tt-x", "x");
-  onSlider("tt-y", "y");
-  onSlider("tt-crop-bottom", "cropBottom");
-
-  $("tt-reset")?.addEventListener("click", () => {
-    const key = elProfile.value;
-    ttProfiles[key] = { ...TT_DEFAULTS[key] };
-    saveTTProfiles(ttProfiles);
-    syncUIFromProfile(key);
-    applyTTVars();
-  });
-
-  $("tt-copy")?.addEventListener("click", async () => {
-    try{
-      const data = {
-        videoOnly: ttVideoOnly,
-        forcedProfile: localStorage.getItem(LS_TT_FORCED) || null,
-        profiles: ttProfiles
-      };
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
-      alert("Настройки скопированы в буфер обмена");
-    }catch(e){
-      alert("Не удалось скопировать. Открой DEBUG и скопируй вручную.");
-    }
-  });
-
-  // keep in sync on resize/orientation
-  window.addEventListener("resize", () => applyTTVars());
-  if(window.matchMedia){
-    try{
-      window.matchMedia("(orientation: portrait)").addEventListener("change", () => applyTTVars());
-    }catch(e){}
-  }
-
-  applyTTVars();
-}
-// ===== END TikTok profiles =====
-
 async function normalizeVideoLink(inputUrl){ // PATCH: TikTok normalize
   const rawUrl = String(inputUrl || "").trim();
   if(!rawUrl) return { url: rawUrl };
+
   pushDebug("normalize-link", { in: rawUrl });
+
   try{
-    const detected = detectMediaType(rawUrl);
-    if (detected.type === "tiktok" && detected.id) {
-      return { url: `https://www.tiktok.com/embed/v2/${detected.id}` };
-    }
+    // YouTube: convert to embed immediately (no server required)
     if (/(youtube\.com|youtu\.be)/i.test(rawUrl)) {
       const info = detectMediaType(rawUrl);
       if (info.type === "youtube" && info.id) {
-        return { url: `https://www.youtube.com/embed/${info.id}?rel=0&modestbranding=1` };
+        const out = `https://www.youtube.com/embed/${info.id}?rel=0&modestbranding=1`;
+        pushDebug("normalize-link", { ok: true, out, platform: "youtube" });
+        return { url: out, data: { ok: true, platform: "youtube" } };
       }
       return { url: rawUrl };
     }
+
+    // Not TikTok -> no normalize
     if (!/tiktok\.com/i.test(rawUrl)) {
       return { url: rawUrl };
     }
+
+    // TikTok: if it's already a /video/<id> link, we can build embed without server
+    const info = detectMediaType(rawUrl);
+    if (info.type === "tiktok" && info.id) {
+      const out = `https://www.tiktok.com/embed/v2/${info.id}`;
+      pushDebug("normalize-link", { ok: true, out, id: info.id, platform: "tiktok-local" });
+      return { url: out, data: { ok: true, videoId: info.id, embedUrl: out, platform: "tiktok-local" } };
+    }
+
+    // Otherwise (short links /t/ / vm.tiktok.com) -> ask server to resolve via oEmbed
     const res = await fetch("/api/normalize-video-link", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ url: rawUrl }),
     });
-    const data = await res.json();
+
+    let data = null;
+    try{
+      data = await res.json();
+    }catch(_){
+      // non-json (e.g., 404 html) -> fallback to raw
+      pushDebug("normalize-link", { ok: false, status: res.status, note: "non-json response" });
+      return { url: rawUrl, data: { ok: false, status: res.status } };
+    }
+
     const normalized = data?.embedUrl || data?.finalUrl || data?.browserUrl || rawUrl;
-    pushDebug("normalize-link", { ok: data?.ok, out: normalized, id: data?.videoId || "" });
+    pushDebug("normalize-link", { ok: Boolean(data?.ok), out: normalized, id: data?.videoId || "" });
+
+    // If server returned a /video/<id> browser link, still convert to embed on client
+    const info2 = detectMediaType(normalized);
+    if (info2.type === "tiktok" && info2.id) {
+      const out = `https://www.tiktok.com/embed/v2/${info2.id}`;
+      return { url: out, data: { ...(data||{}), ok: true, videoId: info2.id, embedUrl: out } };
+    }
+
     return { url: normalized, data };
   }catch(e){
     pushDebug("normalize-link", { error: String(e) });
-    return { url: rawUrl, error: e };
+    return { url: rawUrl, data: { ok: false, error: String(e) } };
   }
 }
+
 function setDebug(open){ $("debug-panel")?.classList.toggle("hidden", !open); }
 $("debug-toggle")?.addEventListener("click", () => setDebug($("debug-panel")?.classList.contains("hidden")));
 $("debug-close")?.addEventListener("click", () => setDebug(false));
 if (new URLSearchParams(location.search).get("debug") === "1") setDebug(true);
-  bindTTControls();
-
 
 // -------- Screen switching
 const screens = ["mode","host","player"].reduce((acc,k)=>{

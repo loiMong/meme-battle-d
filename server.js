@@ -4,110 +4,108 @@
  * - Socket.IO realtime room state
  * - Host anonymity: memes are not sent in room-status during collect until revealed
  */
-const path = require("path");
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
+import path from "path";
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import { fileURLToPath } from "url";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT || 3000;
 
 const app = express();
-app.use(express.json({ limit: '2mb' }));
 const server = http.createServer(app);
 
+app.use(express.json({ limit: "2mb" }));
+app.use(express.static(path.join(__dirname, ".")));
+app.get("/health", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-// --- Normalize TikTok/YouTube links (for embeds) ---
-function extractTikTokId(url){
-  try{
-    const u = new URL(url);
-    const m1 = u.pathname.match(/\/video\/(\d+)/);
-    if(m1) return m1[1];
-    const m2 = u.pathname.match(/\/embed\/v2\/(\d+)/);
-    if(m2) return m2[1];
-    const m3 = url.match(/video\/(\d+)/);
-    if(m3) return m3[1];
+/* === TikTok normalize endpoint (accepts app/share links and returns embed URL) === */
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+function sanitizeUrl(u) {
+  if (typeof u !== "string") return null;
+  const trimmed = u.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (!["http:", "https:"].includes(url.protocol)) return null;
+    return url.toString();
+  } catch {
     return null;
-  }catch(e){
-    const m = String(url||"").match(/video\/(\d+)/);
-    return m ? m[1] : null;
   }
 }
 
-async function tryTikTokOEmbed(inputUrl){
-  // TikTok oEmbed: returns JSON with `html` that contains embed code with video id
-  const api = "https://www.tiktok.com/oembed?url=" + encodeURIComponent(inputUrl);
-  const r = await fetch(api, {
-    headers: {
-      "user-agent": "Mozilla/5.0",
-      "accept": "application/json,text/plain,*/*"
-    }
-  });
-  if(!r.ok) return null;
-  const j = await r.json();
-  const html = j && j.html ? String(j.html) : "";
-  const m = html.match(/embed\/v2\/(\d+)/) || html.match(/data-video-id=['"](\d+)['"]/);
-  const videoId = m ? m[1] : null;
-  return { videoId, html };
+function extractTikTokId(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    const p = u.pathname || "";
+    const m1 = p.match(/\/video\/(\d+)/);
+    if (m1 && m1[1]) return m1[1];
+    const m2 = p.match(/\/embed(?:\/v2)?\/(\d+)/);
+    if (m2 && m2[1]) return m2[1];
+  } catch {}
+  return null;
+}
+
+async function resolveViaOEmbed(originalUrl) {
+  try {
+    const resp = await fetch(
+      `https://www.tiktok.com/oembed?url=${encodeURIComponent(originalUrl)}`,
+      { headers: { "user-agent": UA } }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const html = data?.html || "";
+    const match = html.match(/data-video-id="(\d+)"/);
+    if (match && match[1]) return match[1];
+  } catch {}
+  return null;
 }
 
 app.post("/api/normalize-video-link", async (req, res) => {
-  try{
+  try {
     const inputUrl = String(req.body?.url || "").trim();
-    if(!inputUrl) return res.status(400).json({ ok:false, error:"url is required" });
+    if (!inputUrl) return res.status(400).json({ ok: false, error: "missing url" });
 
-    // Quick pass-through for non-http
-    if(!/^https?:\/\//i.test(inputUrl)){
-      return res.json({ ok:true, inputUrl, finalUrl: inputUrl, embedUrl: inputUrl, hops: 0 });
+    const lower = inputUrl.toLowerCase();
+    if (!lower.includes("tiktok.com")) {
+      return res.json({ ok: true, inputUrl, finalUrl: inputUrl, videoId: null, embedUrl: null, platform: "other" });
     }
 
-    // TikTok
-    if(/tiktok\.com/i.test(inputUrl)){
-      let finalUrl = inputUrl;
-      let videoId = extractTikTokId(finalUrl);
+    const directId =
+      inputUrl.match(/\/video\/(\d+)/i)?.[1] ||
+      inputUrl.match(/\/embed\/v2\/(\d+)/i)?.[1] ||
+      inputUrl.match(/[?&]item_id=(\d+)/i)?.[1];
 
-      // try oEmbed (best for vm.tiktok redirects too)
-      if(!videoId){
-        try{
-          const o = await tryTikTokOEmbed(inputUrl);
-          if(o?.videoId) videoId = o.videoId;
-        }catch(e){}
-      }
+    let videoId = directId || null;
 
-      // try resolve redirects as fallback
-      if(!videoId && /vm\.tiktok\.com|vt\.tiktok\.com/i.test(inputUrl)){
-        try{
-          const r = await fetch(inputUrl, {
-            redirect: "follow",
-            headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,*/*" }
-          });
-          if(r?.url) finalUrl = r.url;
-          videoId = extractTikTokId(finalUrl) || videoId;
-        }catch(e){}
-      }
-
-      const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}` : inputUrl;
-
-      return res.json({
-        ok: true,
-        inputUrl,
-        finalUrl,
-        videoId: videoId || null,
-        embedUrl,
-        hops: 1
-      });
+    let resolved = null;
+    if (!videoId) {
+      resolved = await resolveViaOEmbed(inputUrl);
+      videoId = resolved?.videoId || null;
     }
 
-    // YouTube: nothing special needed (front-end embeds itself), just echo
-    return res.json({ ok:true, inputUrl, finalUrl: inputUrl, embedUrl: inputUrl, hops: 0 });
+    const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}` : null;
 
-  }catch(err){
-    return res.status(500).json({ ok:false, error: String(err?.message || err) });
+    return res.json({
+      ok: true,
+      inputUrl,
+      finalUrl: resolved?.finalUrl || inputUrl,
+      videoId,
+      embedUrl,
+      status: resolved?.status || 200,
+      hops: resolved?.hops || 0,
+      platform: "tiktok",
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
   }
 });
-// --- End normalize ---
 
-app.use(express.static(path.join(__dirname, ".")));
-app.get("/health", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+
 
 const io = new Server(server, {
   cors: { origin: "*" },
