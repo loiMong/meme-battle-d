@@ -9,7 +9,14 @@
   --primary:#5a7bff;
   --danger:#ff4d6d;
 
-  /* TikTok embed transform defaults */
+  /* TikTok embed card defaults (box-based) */
+  --ttBoxW: 100%;            /* max width of TikTok viewport inside card */
+  --ttBoxH: 520px;           /* height of TikTok viewport in card */
+  --ttAnchorTop: 0%;         /* 0%, 50%, 100% */
+  --ttAnchorTranslateY: 0%;  /* 0%, -50%, -100% */
+  --ttCropBottomBox: 60px;   /* hide bottom UI */
+
+  /* Legacy TikTok transform defaults (kept for backward compatibility) */
   --ttCropX: 0px;
   --ttZoom: 1;
   --ttX: 0px;
@@ -232,7 +239,7 @@ textarea{ resize: vertical; min-height: 120px; }
 .offline{opacity:0.6; font-size:12px; margin-left:6px;}
 
 /* === Media frames === */
-.meme .mediaFrame{
+.mediaFrame{
   width: 100%;
   height: auto;
   overflow: visible;
@@ -242,8 +249,8 @@ textarea{ resize: vertical; min-height: 120px; }
 }
 
 /* Common media elements: keep original proportions, no crop */
-.meme .mediaFrame img,
-.meme .mediaFrame video{
+.mediaFrame img,
+.mediaFrame video{
   width: 100%;
   height: auto;
   display: block;
@@ -253,11 +260,11 @@ textarea{ resize: vertical; min-height: 120px; }
 }
 
 /* YouTube: responsive ratio (height is defined by aspect-ratio on wrapper) */
-.meme .mediaFrame.ytFrame{
+.mediaFrame.ytFrame{
   position: relative;
   overflow: hidden;
 }
-.meme .mediaFrame.ytFrame iframe{
+.mediaFrame.ytFrame iframe{
   position: absolute;
   inset: 0;
   width: 100%;
@@ -265,32 +272,29 @@ textarea{ resize: vertical; min-height: 120px; }
   border: 0;
 }
 
-/* TikTok: crop/zoom inside a fixed 9:16 viewport (per-device profiles via CSS vars) */
-.meme .mediaFrame.ttFrame{
+/* TikTok: box-based viewport (no zoom); crop by container + bottom crop */
+.mediaFrame.ttFrame{
   background: #000;
   padding: 0;
 }
-.meme .mediaFrame.ttFrame .ttViewport{
+.mediaFrame.ttFrame .ttViewport{
   position: relative;
-  width: 100%;
-  aspect-ratio: 9 / 16;
+  width: min(100%, var(--ttBoxW, 100%));
+  margin: 0 auto;
+  height: min(var(--ttBoxH, 520px), 70vh);
   overflow: hidden;
   border-radius: 14px;
   background: #000;
 }
-.meme .mediaFrame.ttFrame .ttViewport iframe{
+.mediaFrame.ttFrame .ttViewport iframe{
   position: absolute;
-  top: 50%;
   left: 50%;
-  /* Expand so cropping doesn't show background on the sides */
-  width: calc(100% + (var(--ttCropX, 0px) * 2));
-  height: calc(100% + var(--ttCropBottom, 0px));
+  top: var(--ttAnchorTop, 0%);
+  width: 100%;
+  height: calc(100% + var(--ttCropBottomBox, 0px));
   border: 0;
   display: block;
-  transform-origin: center center;
-  transform:
-    translate(calc(-50% + var(--ttX, 0px)), calc(-50% + var(--ttY, 0px)))
-    scale(var(--ttZoom, 1));
+  transform: translate(-50%, var(--ttAnchorTranslateY, 0%));
 }
 
 /* If previous patches forced fixed heights/aspect for generic wrappers, neutralize them */
@@ -306,3 +310,81 @@ textarea{ resize: vertical; min-height: 120px; }
   overflow: visible !important;
 }
 /* === END PATCH === */
+
+/* === QR + Admin mode === */
+.qrline{ display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; margin-top: 12px; }
+.qrbox{ display:flex; flex-direction:column; gap:6px; }
+.qrimg{ width: 220px; height: 220px; border-radius: 14px; border:1px solid var(--border); background: rgba(0,0,0,0.25); }
+.qrimg.big{ width: min(520px, 80vw); height: auto; aspect-ratio: 1 / 1; }
+.qrhint{ max-width: 220px; }
+.qrbtns{ display:flex; flex-direction:column; gap:8px; }
+
+/* Admin calibration preview uses same media frame rules as memes */
+.cal-preview{ }
+
+.overlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.62);
+  z-index: 9998;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 18px;
+}
+.overlay-card{
+  width: min(720px, 92vw);
+  border:1px solid var(--border);
+  background: rgba(10,16,40,0.92);
+  border-radius: 18px;
+  padding: 14px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 60px rgba(0,0,0,0.35);
+}
+
+.admin-grid{ display:grid; grid-template-columns: 1.2fr 0.8fr; gap: 12px; margin-top: 8px; }
+@media (max-width: 860px){ .admin-grid{ grid-template-columns: 1fr; } }
+.rangev{ display:inline-block; min-width: 44px; text-align:right; color: var(--muted); margin-left: 8px; }
+
+select{
+  width:100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border:1px solid var(--border);
+  background: rgba(0,0,0,0.18);
+  color: var(--text);
+}
+
+/* Switch */
+.switch{ display:flex; align-items:center; gap:10px; margin:0; }
+.switch input{ display:none; }
+.switch .sw{
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.08);
+  position: relative;
+  cursor:pointer;
+}
+.switch .sw:after{
+  content:"";
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(233,236,255,0.92);
+  position:absolute;
+  top: 50%;
+  left: 3px;
+  transform: translateY(-50%);
+  transition: all 0.15s ease;
+}
+.switch input:checked + .sw{
+  background: rgba(90,123,255,0.45);
+  border-color: rgba(90,123,255,0.55);
+}
+.switch input:checked + .sw:after{
+  left: 23px;
+}
+.admin{ margin-top: 14px; }

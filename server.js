@@ -12,6 +12,7 @@ const { Server } = require("socket.io");
 const PORT = process.env.PORT || 3000;
 
 const app = express();
+app.use(express.json({ limit: "2mb" }));
 const server = http.createServer(app);
 
 
@@ -179,6 +180,7 @@ function createRoom(hostId) {
     playersById: Object.create(null),
     nickIndex: Object.create(null),
     socketToPlayerId: Object.create(null),
+    playerCard: { cardWidthPx: 520, cardHeightPx: 520, anchorY: 'top', cropBottomPx: 60 },
     memes: [],           // {id,url,caption,ownerId,nickname,votes}
     updatedAt: Date.now(),
   };
@@ -213,6 +215,7 @@ function broadcast(room) {
     memesCount: room.memes.length,
     players: playersArray(room),
     memes: publicMemes(room),
+    playerCard: room.playerCard || null,
   });
 }
 function ensureHost(room, socket, cb) {
@@ -268,6 +271,30 @@ io.on("connection", (socket) => {
       broadcast(room);
     } catch {
       cbErr(cb, "E_TASK_UPDATE", "Ошибка обновления задания");
+    }
+  });
+
+
+  socket.on("host-playercard-update", (payload, cb) => {
+    try{
+      const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").trim().toUpperCase();
+      const room = getRoom(roomCode);
+      if (!room) return cbErr(cb, "E_ROOM_NOT_FOUND", "Комната не найдена");
+      if (!ensureHost(room, socket, cb)) return;
+
+      const pc = payload?.playerCard || {};
+      const cardWidthPx = Math.max(240, Math.min(1200, Number(pc.cardWidthPx || 520)));
+      const cardHeightPx = Math.max(180, Math.min(1200, Number(pc.cardHeightPx || 520)));
+      const cropBottomPx = Math.max(0, Math.min(400, Number(pc.cropBottomPx || 0)));
+      const anchorY = ["top","center","bottom"].includes(String(pc.anchorY)) ? String(pc.anchorY) : "top";
+
+      room.playerCard = { cardWidthPx, cardHeightPx, cropBottomPx, anchorY };
+      room.updatedAt = Date.now();
+
+      cbOk(cb, { playerCard: room.playerCard });
+      broadcast(room);
+    }catch{
+      cbErr(cb, "E_PLAYER_CARD", "Ошибка калибровки плеера");
     }
   });
 

@@ -40,6 +40,76 @@
           <div class="muted" id="host-room-link"></div>
         </div>
 
+          <div class="qrline">
+            <div class="qrbox">
+              <img id="host-qr-img" alt="QR" class="qrimg" />
+              <div class="muted qrhint">Сканируй, чтобы зайти: <span id="host-room-code-mini">—</span></div>
+            </div>
+            <div class="qrbtns">
+              <button id="host-qr-full" class="secondary" disabled>QR на весь экран</button>
+            </div>
+          </div>
+
+
+        
+          <div class="panel admin hidden" id="admin-panel">
+            <div class="row">
+              <h3>Admin mode</h3>
+              <label class="switch">
+                <input id="admin-enabled" type="checkbox"/>
+                <span class="sw"></span>
+              </label>
+            </div>
+            <div class="muted">Калибровка карточки плеера применяется ко всем в комнате.</div>
+
+            <div class="admin-grid">
+              <div>
+                <label>Ширина карточки (px):
+                  <input id="cal-card-w" type="range" min="240" max="900" step="10" value="520"/>
+                  <span class="rangev" id="cal-card-wv">520</span>
+                </label>
+
+                <label>Высота карточки (px):
+                  <input id="cal-card-h" type="range" min="220" max="900" step="10" value="520"/>
+                  <span class="rangev" id="cal-card-hv">520</span>
+                </label>
+
+                <label>Привязка (Y):
+                  <select id="cal-anchor-y">
+                    <option value="top">верх</option>
+                    <option value="center">центр</option>
+                    <option value="bottom">низ</option>
+                  </select>
+                </label>
+
+                <label>Обрезка снизу (px):
+                  <input id="cal-crop-b" type="range" min="0" max="260" step="2" value="60"/>
+                  <span class="rangev" id="cal-crop-bv">60</span>
+                </label>
+
+                <div class="btns">
+                  <button id="cal-apply" class="primary" disabled>Применить</button>
+                  <button id="cal-reset" class="ghost" disabled>Сброс</button>
+                </div>
+              </div>
+
+              <div>
+                <div class="muted" style="margin-bottom:6px">Пресеты</div>
+                <div class="btns">
+                  <button id="cal-preset-desktop" class="secondary" disabled>ПК / большой экран</button>
+                  <button id="cal-preset-mobile" class="secondary" disabled>Мобилка (вертикаль)</button>
+                </div>
+                <div class="muted" style="margin-top:10px">Совет: выставь высоту так, чтобы в карточке осталось только видео, а низ TikTok ушёл за край через «Обрезка снизу».</div>
+
+                <div class="muted" style="margin-top:14px; margin-bottom:6px">Калибровочное видео (TikTok)</div>
+                <div id="cal-preview" class="cal-preview"></div>
+                <div class="btns" style="margin-top:10px">
+                  <button id="cal-open-video" class="ghost" type="button">Открыть калибровочное видео</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
         <div class="grid2">
           <div class="panel">
             <h3>Настройки игры</h3>
@@ -145,6 +215,22 @@
     </div>
     <div id="debug-body" class="debug-body"></div>
   </div>
+
+
+  <div id="qr-overlay" class="overlay hidden">
+    <div class="overlay-card">
+      <div class="row">
+        <h3>QR для входа</h3>
+        <button id="qr-close" class="ghost">×</button>
+      </div>
+      <img id="qr-overlay-img" class="qrimg big" alt="QR"/>
+      <div class="muted" id="qr-overlay-link">—</div>
+      <div class="btns" style="margin-top:10px">
+        <button id="qr-copy" class="secondary">Скопировать ссылку</button>
+      </div>
+    </div>
+  </div>
+
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="./script.js"></script>

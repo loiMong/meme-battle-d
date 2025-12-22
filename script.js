@@ -2,6 +2,9 @@
 
 const SERVER_URL = window.location.origin;
 
+// TikTok calibration video (used in Admin mode preview)
+const CALIBRATION_TIKTOK_URL = "https://www.tiktok.com/@prokendol112/video/7508817190636752146?is_from_webapp=1&sender_device=pc&web_id=7584888569203066390";
+
 const $ = (id) => document.getElementById(id);
 
 
@@ -140,6 +143,7 @@ function renderMediaHTML(url){
 
 const LS_NICK = "mb_nick";
 const LS_ROOM = "mb_room";
+const LS_PLAYER_CARD = "mb_player_card_v1";
 
 function now() { return new Date().toLocaleTimeString(); }
 function safeJson(x){ try{ return JSON.stringify(x); } catch{ return String(x); } }
@@ -333,6 +337,62 @@ function applyTTVars(reason = ""){
     window.__mbTTLastSig = sig;
     pushDebug("tt:apply", { reason, profile: key, forced: !!forced, viewport: { w, h }, raw: p, scaled });
   }
+}
+
+// ===== Player card calibration (box-based, no zoom) =====
+// cardWidthPx is a max-width cap for the TikTok viewport inside the card.
+// If the surrounding layout is narrower, it will still shrink naturally.
+const DEFAULT_PLAYER_CARD = { cardWidthPx: 520, cardHeightPx: 520, cropBottomPx: 60, anchorY: "top" };
+
+function normalizePlayerCard(pc){
+  const o = pc || {};
+  const cardWidthPx = Math.max(240, Math.min(1200, Number(o.cardWidthPx ?? DEFAULT_PLAYER_CARD.cardWidthPx)));
+  const cardHeightPx = Math.max(180, Math.min(1200, Number(o.cardHeightPx ?? DEFAULT_PLAYER_CARD.cardHeightPx)));
+  const cropBottomPx = Math.max(0, Math.min(400, Number(o.cropBottomPx ?? DEFAULT_PLAYER_CARD.cropBottomPx)));
+  const anchorY = ["top","center","bottom"].includes(String(o.anchorY)) ? String(o.anchorY) : DEFAULT_PLAYER_CARD.anchorY;
+  return { cardWidthPx, cardHeightPx, cropBottomPx, anchorY };
+}
+
+function playerCardToCssVars(pc){
+  const p = normalizePlayerCard(pc);
+  let top = "0%";
+  let ty = "0%";
+  if (p.anchorY === "center"){ top = "50%"; ty = "-50%"; }
+  if (p.anchorY === "bottom"){ top = "100%"; ty = "-100%"; }
+  return {
+    "--ttBoxW": `${p.cardWidthPx}px`,
+    "--ttBoxH": `${p.cardHeightPx}px`,
+    "--ttCropBottomBox": `${p.cropBottomPx}px`,
+    "--ttAnchorTop": top,
+    "--ttAnchorTranslateY": ty,
+
+    // Keep legacy vars neutral (we don't use zoom anymore)
+    "--ttZoom": "1",
+    "--ttX": "0px",
+    "--ttY": "0px",
+    "--ttCropX": "0px",
+    "--ttCropBottom": "0px",
+  };
+}
+
+function applyPlayerCardVars(pc, reason=""){
+  const vars = playerCardToCssVars(pc);
+  const root = document.documentElement;
+  Object.entries(vars).forEach(([k,v]) => root.style.setProperty(k, v));
+  pushDebug("pc:apply", { reason, pc: normalizePlayerCard(pc), vars });
+}
+
+function loadLocalPlayerCard(){
+  try{
+    const raw = localStorage.getItem(LS_PLAYER_CARD);
+    if(!raw) return null;
+    return normalizePlayerCard(JSON.parse(raw));
+  }catch(e){
+    return null;
+  }
+}
+function saveLocalPlayerCard(pc){
+  try{ localStorage.setItem(LS_PLAYER_CARD, JSON.stringify(normalizePlayerCard(pc))); }catch(e){}
 }
 
 function ensureTTDebugControls(){
@@ -553,6 +613,7 @@ pushDebug("env", {
 
 // Init TT controls + initial vars (will re-apply after embeds load/render)
 try{ initTTDebugControls(); }catch(e){}
+try{ applyPlayerCardVars(loadLocalPlayerCard()||DEFAULT_PLAYER_CARD, "init"); }catch(e){}
 try{ applyTTVars("init"); }catch(e){}
 setTimeout(() => {
   try{ applyTTVars("init:delayed"); }catch(e){}
@@ -625,10 +686,42 @@ function hostSetRoom(code){
   $("host-room-code").textContent = code || "—";
   const link = `${location.origin}/?room=${encodeURIComponent(code)}`;
   $("host-room-link").textContent = link;
+
+  // QR
+  const qrData = encodeURIComponent(link);
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${qrData}`;
+  const img = $("host-qr-img");
+  const imgBig = $("qr-overlay-img");
+  if (img) img.src = qrSrc;
+  if (imgBig) imgBig.src = `https://api.qrserver.com/v1/create-qr-code/?size=520x520&data=${qrData}`;
+  const mini = $("host-room-code-mini");
+  if (mini) mini.textContent = code || "—";
+
+  const fullBtn = $("host-qr-full");
+  if (fullBtn) fullBtn.disabled = !code;
+  $("cal-apply") && ($("cal-apply").disabled = !code);
+  $("cal-reset") && ($("cal-reset").disabled = !code);
+  $("cal-preset-desktop") && ($("cal-preset-desktop").disabled = !code);
+  $("cal-preset-mobile") && ($("cal-preset-mobile").disabled = !code);
 }
 $("host-copy-link")?.addEventListener("click", async () => {
   const link = $("host-room-link").textContent || "";
   try{ await navigator.clipboard.writeText(link); pushDebug("copy", "ok"); }catch(e){ pushDebug("copy", String(e)); }
+});
+
+// --- QR overlay
+$("host-qr-full")?.addEventListener("click", () => {
+  const link = $("host-room-link")?.textContent || "";
+  $("qr-overlay-link").textContent = link || "—";
+  $("qr-overlay").classList.remove("hidden");
+});
+$("qr-close")?.addEventListener("click", () => $("qr-overlay").classList.add("hidden"));
+$("qr-overlay")?.addEventListener("click", (e) => {
+  if (e.target && e.target.id === "qr-overlay") $("qr-overlay").classList.add("hidden");
+});
+$("qr-copy")?.addEventListener("click", async () => {
+  const link = $("host-room-link")?.textContent || "";
+  try{ await navigator.clipboard.writeText(link); pushDebug("qr:copy", "ok"); }catch(e){ pushDebug("qr:copy", String(e)); }
 });
 $("host-create-room")?.addEventListener("click", () => {
   socket.emit("host-create-room", (res) => {
@@ -638,6 +731,94 @@ $("host-create-room")?.addEventListener("click", () => {
     $("host-start-game").disabled = false;
     $("host-end-game").disabled = false;
   });
+
+// --- Admin mode (player card calibration)
+function setAdminVisible(on){
+  $("admin-panel")?.classList.toggle("hidden", !on);
+}
+setAdminVisible(true); // panel exists, but controls disabled until room created
+
+function renderCalibrationPreview(){
+  const box = $("cal-preview");
+  if(!box) return;
+  // Render a fixed TikTok video so the host can tune height/anchor/crop
+  box.innerHTML = renderMediaHTML(CALIBRATION_TIKTOK_URL);
+}
+
+$("cal-open-video")?.addEventListener("click", () => {
+  try{ window.open(CALIBRATION_TIKTOK_URL, "_blank", "noopener"); }catch(e){}
+});
+
+function fillAdminFrom(pc){
+  const p = normalizePlayerCard(pc || DEFAULT_PLAYER_CARD);
+  if ($("cal-card-w")) $("cal-card-w").value = String(p.cardWidthPx);
+  if ($("cal-card-wv")) $("cal-card-wv").textContent = String(p.cardWidthPx);
+  if ($("cal-card-h")) $("cal-card-h").value = String(p.cardHeightPx);
+  if ($("cal-card-hv")) $("cal-card-hv").textContent = String(p.cardHeightPx);
+  if ($("cal-crop-b")) $("cal-crop-b").value = String(p.cropBottomPx);
+  if ($("cal-crop-bv")) $("cal-crop-bv").textContent = String(p.cropBottomPx);
+  if ($("cal-anchor-y")) $("cal-anchor-y").value = p.anchorY;
+}
+
+function readAdminCalib(){
+  const cardWidthPx = Number($("cal-card-w")?.value || DEFAULT_PLAYER_CARD.cardWidthPx);
+  const cardHeightPx = Number($("cal-card-h")?.value || DEFAULT_PLAYER_CARD.cardHeightPx);
+  const cropBottomPx = Number($("cal-crop-b")?.value || DEFAULT_PLAYER_CARD.cropBottomPx);
+  const anchorY = String($("cal-anchor-y")?.value || DEFAULT_PLAYER_CARD.anchorY);
+  return normalizePlayerCard({ cardWidthPx, cardHeightPx, cropBottomPx, anchorY });
+}
+
+function emitPlayerCard(pc, reason=""){
+  if(!currentRoom) return;
+  const p = normalizePlayerCard(pc);
+  // apply locally immediately for host preview
+  applyPlayerCardVars(p, "host:"+reason);
+  saveLocalPlayerCard(p);
+
+  socket.emit("host-playercard-update", { roomCode: currentRoom, playerCard: p }, (res)=>{
+    pushDebug("host-playercard-update", res);
+    if(!res?.ok) alert(res?.error || "Ошибка калибровки");
+  });
+}
+
+["cal-card-w","cal-card-h","cal-crop-b"].forEach(id=>{
+  $(id)?.addEventListener("input", () => {
+    if (id==="cal-card-w") $("cal-card-wv").textContent = String($("cal-card-w").value);
+    if (id==="cal-card-h") $("cal-card-hv").textContent = String($("cal-card-h").value);
+    if (id==="cal-crop-b") $("cal-crop-bv").textContent = String($("cal-crop-b").value);
+  });
+});
+
+$("cal-apply")?.addEventListener("click", () => emitPlayerCard(readAdminCalib(), "apply"));
+$("cal-reset")?.addEventListener("click", () => {
+  const def = { ...DEFAULT_PLAYER_CARD };
+  fillAdminFrom(def);
+  emitPlayerCard(def, "reset");
+});
+
+$("cal-preset-desktop")?.addEventListener("click", () => {
+  const preset = { cardWidthPx: 520, cardHeightPx: 520, cropBottomPx: 60, anchorY: "top" };
+  fillAdminFrom(preset);
+  emitPlayerCard(preset, "preset:desktop");
+});
+$("cal-preset-mobile")?.addEventListener("click", () => {
+  const preset = { cardWidthPx: 360, cardHeightPx: 420, cropBottomPx: 70, anchorY: "top" };
+  fillAdminFrom(preset);
+  emitPlayerCard(preset, "preset:mobile");
+});
+
+// Load local calibration on startup (host preview even before room)
+const localPc = loadLocalPlayerCard();
+if(localPc) {
+  fillAdminFrom(localPc);
+  applyPlayerCardVars(localPc, "local");
+} else {
+  fillAdminFrom(DEFAULT_PLAYER_CARD);
+  applyPlayerCardVars(DEFAULT_PLAYER_CARD, "default");
+}
+
+// Show calibration TikTok embed inside admin panel
+renderCalibrationPreview();
 });
 
 function parseTasks(){
@@ -932,7 +1113,12 @@ socket.on("room-status", (st) => {
     if (st.task) $("player-task").textContent = st.task;
   }
 
-  // After any UI update, ensure TikTok transforms are re-applied (cards may have different sizes)
+  // Apply player card calibration coming from server (host sets it)
+  if(st?.playerCard){
+    try{ applyPlayerCardVars(st.playerCard, "room-status"); }catch(e){}
+  }
+
+  // Legacy: keep TT transforms neutral
   try{ applyTTVars("room-status"); }catch(e){}
 });
 
@@ -977,6 +1163,7 @@ socket.on("voting-started", ({ roomCode, memes }) => {
     });
 
     // Apply TT vars after rendering the voting grid
+    try{ applyPlayerCardVars(loadLocalPlayerCard()||DEFAULT_PLAYER_CARD, "voting-started"); }catch(e){}
     try{ applyTTVars("voting-started"); }catch(e){}
   }
 });
