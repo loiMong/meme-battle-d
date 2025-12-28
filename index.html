@@ -52,63 +52,9 @@
 
 
         
-          <div class="panel admin hidden" id="admin-panel">
-            <div class="row">
-              <h3>Admin mode</h3>
-              <label class="switch">
-                <input id="admin-enabled" type="checkbox"/>
-                <span class="sw"></span>
-              </label>
-            </div>
-            <div class="muted">Калибровка карточки плеера применяется ко всем в комнате.</div>
+          
 
-            <div class="admin-grid">
-              <div>
-                <label>Ширина карточки (px):
-                  <input id="cal-card-w" type="range" min="240" max="900" step="10" value="520"/>
-                  <span class="rangev" id="cal-card-wv">520</span>
-                </label>
 
-                <label>Высота карточки (px):
-                  <input id="cal-card-h" type="range" min="220" max="900" step="10" value="520"/>
-                  <span class="rangev" id="cal-card-hv">520</span>
-                </label>
-
-                <label>Привязка (Y):
-                  <select id="cal-anchor-y">
-                    <option value="top">верх</option>
-                    <option value="center">центр</option>
-                    <option value="bottom">низ</option>
-                  </select>
-                </label>
-
-                <label>Обрезка снизу (px):
-                  <input id="cal-crop-b" type="range" min="0" max="260" step="2" value="60"/>
-                  <span class="rangev" id="cal-crop-bv">60</span>
-                </label>
-
-                <div class="btns">
-                  <button id="cal-apply" class="primary" disabled>Применить</button>
-                  <button id="cal-reset" class="ghost" disabled>Сброс</button>
-                </div>
-              </div>
-
-              <div>
-                <div class="muted" style="margin-bottom:6px">Пресеты</div>
-                <div class="btns">
-                  <button id="cal-preset-desktop" class="secondary" disabled>ПК / большой экран</button>
-                  <button id="cal-preset-mobile" class="secondary" disabled>Мобилка (вертикаль)</button>
-                </div>
-                <div class="muted" style="margin-top:10px">Совет: выставь высоту так, чтобы в карточке осталось только видео, а низ TikTok ушёл за край через «Обрезка снизу».</div>
-
-                <div class="muted" style="margin-top:14px; margin-bottom:6px">Калибровочное видео (TikTok)</div>
-                <div id="cal-preview" class="cal-preview"></div>
-                <div class="btns" style="margin-top:10px">
-                  <button id="cal-open-video" class="ghost" type="button">Открыть калибровочное видео</button>
-                </div>
-              </div>
-            </div>
-          </div>
 
         <div class="grid2">
           <div class="panel">
@@ -203,7 +149,91 @@
     </main>
   </div>
 
-  <button id="debug-toggle" class="debug-btn">DEBUG</button>
+  
+  <button id="settings-toggle" class="settings-btn hidden">Настройки</button>
+  <div id="settings-panel" class="settings hidden">
+    <div class="settings-head">
+      <b>Настройки</b>
+      <button id="settings-close" class="ghost">×</button>
+    </div>
+    <div class="settings-body">
+      <div class="panel admin" id="admin-panel">
+            <div class="row">
+              <h3>Admin mode</h3>
+              <label class="switch">
+                <input id="admin-enabled" type="checkbox"/>
+                <span class="sw"></span>
+              </label>
+            </div>
+            <div class="muted">Калибровка карточки плеера действует только на этом устройстве.</div>
+
+            <div class="admin-grid">
+              <div>
+                <label>Ширина карточки (px):
+                  <input id="cal-card-w" type="range" min="240" max="900" step="10" value="520"/>
+                  <span class="rangev" id="cal-card-wv">520</span>
+                </label>
+
+                <label>Высота карточки (px):
+                  <input id="cal-card-h" type="range" min="220" max="900" step="10" value="520"/>
+                  <span class="rangev" id="cal-card-hv">520</span>
+                </label>
+
+
+                <label>Масштаб плеера (zoom):
+                  <div class="rangeRow">
+                    <button id="cal-zoom-minus" class="miniBtn ghost" type="button">−</button>
+                    <input id="cal-zoom" type="range" min="0.10" max="2.0" step="0.01" value="1"/>
+                    <button id="cal-zoom-plus" class="miniBtn ghost" type="button">+</button>
+                    <span class="rangev" id="cal-zoomv">1.00</span>
+                  </div>
+                </label>
+
+                <label>Привязка (Y):
+                  <select id="cal-anchor-y">
+                    <option value="top">верх</option>
+                    <option value="center">центр</option>
+                    <option value="bottom">низ</option>
+                  </select>
+                </label>
+
+                
+                <label>Рамки по краям (px):
+                  <input id="cal-crop-x" type="range" min="-600" max="600" step="2" value="0"/>
+                  <span class="rangev" id="cal-crop-xv">0</span>
+                </label>
+<label>Обрезка снизу (px):
+                  <input id="cal-crop-b" type="range" min="0" max="260" step="2" value="60"/>
+                  <span class="rangev" id="cal-crop-bv">60</span>
+                </label>
+
+                <div class="btns">
+                  <button id="cal-save" class="primary" type="button">Сохранить</button>
+                  <button id="cal-reset" class="ghost" type="button">Сброс</button>
+                </div>
+                <div class="muted" id="cal-save-status" style="margin-top:8px"></div>
+              </div>
+
+              <div>
+                <div class="muted" style="margin-bottom:6px">Пресеты</div>
+                <div class="btns">
+                  <button id="cal-preset-desktop" class="secondary">ПК / большой экран</button>
+                  <button id="cal-preset-mobile" class="secondary">Мобилка (вертикаль)</button>
+                </div>
+                <div class="muted" style="margin-top:10px">Совет: выставь высоту так, чтобы в карточке осталось только видео, а низ TikTok ушёл за край через «Обрезка снизу».</div>
+
+                <div class="muted" style="margin-top:14px; margin-bottom:6px">Калибровочное видео (TikTok)</div>
+                <div id="cal-preview" class="cal-preview"></div>
+                <div class="btns" style="margin-top:10px">
+                  <button id="cal-open-video" class="ghost" type="button">Открыть калибровочное видео</button>
+                </div>
+              </div>
+            </div>
+          </div>
+    </div>
+  </div>
+
+<button id="debug-toggle" class="debug-btn">DEBUG</button>
   <div id="debug-panel" class="debug hidden">
     <div class="debug-head">
       <b>DEBUG</b>

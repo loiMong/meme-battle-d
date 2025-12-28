@@ -7,6 +7,16 @@ const CALIBRATION_TIKTOK_URL = "https://www.tiktok.com/@prokendol112/video/75088
 
 const $ = (id) => document.getElementById(id);
 
+// Small helper for +/- buttons around range inputs
+function nudgeRange(id, delta, min, max){
+  const el = $(id);
+  if(!el) return;
+  const cur = Number(el.value);
+  const next = Math.max(min, Math.min(max, cur + delta));
+  el.value = String(next);
+  el.dispatchEvent(new Event("input", { bubbles:true }));
+}
+
 
 
 /* === Media helpers: render without cropping; different approach for YT vs TikTok === */
@@ -342,15 +352,18 @@ function applyTTVars(reason = ""){
 // ===== Player card calibration (box-based, no zoom) =====
 // cardWidthPx is a max-width cap for the TikTok viewport inside the card.
 // If the surrounding layout is narrower, it will still shrink naturally.
-const DEFAULT_PLAYER_CARD = { cardWidthPx: 520, cardHeightPx: 520, cropBottomPx: 60, anchorY: "top" };
+const DEFAULT_PLAYER_CARD = { cardWidthPx: 520, cardHeightPx: 520, cropSidePx: 0, cropBottomPx: 60, anchorY: "top", scale: 1.0 };
 
 function normalizePlayerCard(pc){
   const o = pc || {};
   const cardWidthPx = Math.max(240, Math.min(1200, Number(o.cardWidthPx ?? DEFAULT_PLAYER_CARD.cardWidthPx)));
   const cardHeightPx = Math.max(180, Math.min(1200, Number(o.cardHeightPx ?? DEFAULT_PLAYER_CARD.cardHeightPx)));
+  // Positive values crop more (hide side UI). Negative values zoom out (show more / add side bars).
+  const cropSidePx = Math.max(-600, Math.min(600, Number(o.cropSidePx ?? DEFAULT_PLAYER_CARD.cropSidePx ?? 0)));
   const cropBottomPx = Math.max(0, Math.min(400, Number(o.cropBottomPx ?? DEFAULT_PLAYER_CARD.cropBottomPx)));
   const anchorY = ["top","center","bottom"].includes(String(o.anchorY)) ? String(o.anchorY) : DEFAULT_PLAYER_CARD.anchorY;
-  return { cardWidthPx, cardHeightPx, cropBottomPx, anchorY };
+  const scale = Math.max(0.1, Math.min(2.0, Number(o.scale ?? DEFAULT_PLAYER_CARD.scale ?? 1)));
+  return { cardWidthPx, cardHeightPx, cropSidePx, cropBottomPx, anchorY, scale };
 }
 
 function playerCardToCssVars(pc){
@@ -363,8 +376,11 @@ function playerCardToCssVars(pc){
     "--ttBoxW": `${p.cardWidthPx}px`,
     "--ttBoxH": `${p.cardHeightPx}px`,
     "--ttCropBottomBox": `${p.cropBottomPx}px`,
+    "--ttCropSide2": `${Math.round((p.cropSidePx||0) * 2)}px`,
     "--ttAnchorTop": top,
     "--ttAnchorTranslateY": ty,
+    "--ttScale": String(p.scale ?? 1),
+    "--ttOriginY": (p.anchorY === "bottom" ? "100%" : (p.anchorY === "center" ? "50%" : "0%")),
 
     // Keep legacy vars neutral (we don't use zoom anymore)
     "--ttZoom": "1",
@@ -596,6 +612,16 @@ $("debug-toggle")?.addEventListener("click", () => setDebug($("debug-panel")?.cl
 $("debug-close")?.addEventListener("click", () => setDebug(false));
 $("debug-copy")?.addEventListener("click", () => copyDebugToClipboard());
 $("debug-clear")?.addEventListener("click", () => clearDebug());
+
+function setSettings(open){ $("settings-panel")?.classList.toggle("hidden", !open); }
+$("settings-toggle")?.addEventListener("click", () => setSettings($("settings-panel")?.classList.contains("hidden")));
+$("settings-close")?.addEventListener("click", () => setSettings(false));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape"){
+    if (!$("settings-panel")?.classList.contains("hidden")) setSettings(false);
+    if (!$("debug-panel")?.classList.contains("hidden")) setDebug(false);
+  }
+});
 if (new URLSearchParams(location.search).get("debug") === "1") setDebug(true);
 
 // Log environment once (helps understand why TikTok embeds may be blocked)
@@ -629,6 +655,10 @@ function showScreen(name){
     if(!el) return;
     el.classList.toggle("hidden", k !== name);
   });
+  // Settings button only after selecting role
+  const sb = $("settings-toggle");
+  if(sb) sb.classList.toggle("hidden", name === "mode");
+  if(name === "mode") { try{ setSettings(false); }catch(e){} }
   pushDebug("screen", name);
 }
 $("btn-mode-host")?.addEventListener("click", () => showScreen("host"));
@@ -675,6 +705,7 @@ let currentRoom = "";
 let hostState = { totalRounds: 5, tasks: [], round: 0, scores: {} };
 let playerState = { joined: false, playerId: "", nickname: "", roomCode: "" };
 
+
 let hostLatestMemes = [];
 let hostMemesCount = 0;
 let hostMemesRevealed = false;
@@ -699,10 +730,6 @@ function hostSetRoom(code){
 
   const fullBtn = $("host-qr-full");
   if (fullBtn) fullBtn.disabled = !code;
-  $("cal-apply") && ($("cal-apply").disabled = !code);
-  $("cal-reset") && ($("cal-reset").disabled = !code);
-  $("cal-preset-desktop") && ($("cal-preset-desktop").disabled = !code);
-  $("cal-preset-mobile") && ($("cal-preset-mobile").disabled = !code);
 }
 $("host-copy-link")?.addEventListener("click", async () => {
   const link = $("host-room-link").textContent || "";
@@ -731,19 +758,35 @@ $("host-create-room")?.addEventListener("click", () => {
     $("host-start-game").disabled = false;
     $("host-end-game").disabled = false;
   });
+});
 
 // --- Admin mode (player card calibration)
 function setAdminVisible(on){
-  $("admin-panel")?.classList.toggle("hidden", !on);
+  // Keep header visible; toggle only the controls grid
+  document.querySelector("#admin-panel .admin-grid")?.classList.toggle("hidden", !on);
 }
-setAdminVisible(true); // panel exists, but controls disabled until room created
 
+// Persist admin mode UI state (per device)
+try{
+  const saved = localStorage.getItem("mb_admin_enabled");
+  if(saved === "1") $("admin-enabled") && ($("admin-enabled").checked = true);
+}catch(e){}
+setAdminVisible(!!$("admin-enabled")?.checked);
+$("admin-enabled")?.addEventListener("change", ()=>{
+  const on = !!$("admin-enabled")?.checked;
+  try{ localStorage.setItem("mb_admin_enabled", on ? "1" : "0"); }catch(e){}
+  setAdminVisible(on);
+});
 function renderCalibrationPreview(){
   const box = $("cal-preview");
   if(!box) return;
   // Render a fixed TikTok video so the host can tune height/anchor/crop
   box.innerHTML = renderMediaHTML(CALIBRATION_TIKTOK_URL);
+  refreshCalibRangesSoon();
 }
+
+$("cal-zoom-minus")?.addEventListener("click", () => nudgeRange("cal-zoom", -0.05, 0.1, 2.0));
+$("cal-zoom-plus")?.addEventListener("click", () => nudgeRange("cal-zoom", 0.05, 0.1, 2.0));
 
 $("cal-open-video")?.addEventListener("click", () => {
   try{ window.open(CALIBRATION_TIKTOK_URL, "_blank", "noopener"); }catch(e){}
@@ -755,59 +798,139 @@ function fillAdminFrom(pc){
   if ($("cal-card-wv")) $("cal-card-wv").textContent = String(p.cardWidthPx);
   if ($("cal-card-h")) $("cal-card-h").value = String(p.cardHeightPx);
   if ($("cal-card-hv")) $("cal-card-hv").textContent = String(p.cardHeightPx);
+  if ($("cal-crop-x")) $("cal-crop-x").value = String(p.cropSidePx ?? 0);
+  if ($("cal-crop-xv")) $("cal-crop-xv").textContent = String(p.cropSidePx ?? 0);
   if ($("cal-crop-b")) $("cal-crop-b").value = String(p.cropBottomPx);
   if ($("cal-crop-bv")) $("cal-crop-bv").textContent = String(p.cropBottomPx);
   if ($("cal-anchor-y")) $("cal-anchor-y").value = p.anchorY;
+  if ($("cal-zoom")) $("cal-zoom").value = String(p.scale ?? 1);
+  if ($("cal-zoomv")) $("cal-zoomv").textContent = String(Number(p.scale ?? 1).toFixed(2));
 }
 
 function readAdminCalib(){
   const cardWidthPx = Number($("cal-card-w")?.value || DEFAULT_PLAYER_CARD.cardWidthPx);
   const cardHeightPx = Number($("cal-card-h")?.value || DEFAULT_PLAYER_CARD.cardHeightPx);
+  const cropSidePx = Number($("cal-crop-x")?.value || DEFAULT_PLAYER_CARD.cropSidePx || 0);
   const cropBottomPx = Number($("cal-crop-b")?.value || DEFAULT_PLAYER_CARD.cropBottomPx);
   const anchorY = String($("cal-anchor-y")?.value || DEFAULT_PLAYER_CARD.anchorY);
-  return normalizePlayerCard({ cardWidthPx, cardHeightPx, cropBottomPx, anchorY });
+  const scale = Number($("cal-zoom")?.value || DEFAULT_PLAYER_CARD.scale || 1);
+  return normalizePlayerCard({ cardWidthPx, cardHeightPx, cropSidePx, cropBottomPx, anchorY, scale });
 }
 
-function emitPlayerCard(pc, reason=""){
-  if(!currentRoom) return;
-  const p = normalizePlayerCard(pc);
-  // apply locally immediately for host preview
-  applyPlayerCardVars(p, "host:"+reason);
-  saveLocalPlayerCard(p);
+let adminDraftPlayerCard = null;
 
-  socket.emit("host-playercard-update", { roomCode: currentRoom, playerCard: p }, (res)=>{
-    pushDebug("host-playercard-update", res);
-    if(!res?.ok) alert(res?.error || "Ошибка калибровки");
+function flashSaved(id){
+  const el = $(id);
+  if(!el) return;
+  try{ el.textContent = "Сохранено ✓"; }catch(e){}
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>{ try{ el.textContent=""; }catch(e){} }, 1600);
+}
+
+function computeAnyTTWrapperWidth(){
+  let max = 0;
+  document.querySelectorAll(".mediaFrame.ttFrame").forEach(el=>{
+    const w = el.getBoundingClientRect().width;
+    if(w > max) max = w;
   });
+  return Math.floor(max || 0);
 }
 
-["cal-card-w","cal-card-h","cal-crop-b"].forEach(id=>{
+function computeWrapperWidthIn(containerId){
+  const c = $(containerId);
+  if(c){
+    const el = c.querySelector?.(".mediaFrame.ttFrame") || c;
+    const w = el.getBoundingClientRect?.().width || 0;
+    if(w > 50) return Math.floor(w);
+  }
+  const any = computeAnyTTWrapperWidth();
+  if(any > 50) return any;
+  return Math.floor((c?.getBoundingClientRect?.().width || 0));
+}
+
+let _calibRangeTimer = null;
+function refreshCalibRangesSoon(){
+  clearTimeout(_calibRangeTimer);
+  _calibRangeTimer = setTimeout(()=>{
+    const adminAvail = computeWrapperWidthIn("cal-preview");
+    const adminW = $("cal-card-w");
+    if(adminW){
+      const min = Number(adminW.min || 240);
+      const max = Math.max(min, Math.min(1200, adminAvail || Number(adminW.max || 900)));
+      adminW.max = String(max);
+      if(Number(adminW.value) > max) adminW.value = String(max);
+      $("cal-card-wv") && ($("cal-card-wv").textContent = String(adminW.value));
+    }
+
+    const playerAvail = computeWrapperWidthIn("player-cal-preview");
+    const pW = $("player-cal-card-w");
+    if(pW){
+      const min = Number(pW.min || 240);
+      const max = Math.max(min, Math.min(1200, playerAvail || Number(pW.max || 900)));
+      pW.max = String(max);
+      if(Number(pW.value) > max) pW.value = String(max);
+      $("player-cal-card-wv") && ($("player-cal-card-wv").textContent = String(pW.value));
+    }
+  }, 60);
+}
+
+window.addEventListener("resize", refreshCalibRangesSoon);
+
+function adminApplyPlayerCard(pc, reason=""){
+  const p = normalizePlayerCard(pc);
+  adminDraftPlayerCard = p;
+  applyPlayerCardVars(p, "admin:"+reason);
+  refreshCalibRangesSoon();
+}
+
+function adminApplyFromUI(reason="live"){
+  adminApplyPlayerCard(readAdminCalib(), reason);
+}
+
+
+function updateAdminRangeLabels(){
+  $("cal-card-wv") && ($("cal-card-wv").textContent = String($("cal-card-w")?.value || ""));
+  $("cal-card-hv") && ($("cal-card-hv").textContent = String($("cal-card-h")?.value || ""));
+  $("cal-crop-xv") && ($("cal-crop-xv").textContent = String($("cal-crop-x")?.value || ""));
+  $("cal-crop-bv") && ($("cal-crop-bv").textContent = String($("cal-crop-b")?.value || ""));
+  $("cal-zoomv") && ($("cal-zoomv").textContent = String(Number($("cal-zoom")?.value || 1).toFixed(2)));
+}
+
+["cal-card-w","cal-card-h","cal-crop-x","cal-crop-b","cal-zoom"].forEach(id=>{
   $(id)?.addEventListener("input", () => {
-    if (id==="cal-card-w") $("cal-card-wv").textContent = String($("cal-card-w").value);
-    if (id==="cal-card-h") $("cal-card-hv").textContent = String($("cal-card-h").value);
-    if (id==="cal-crop-b") $("cal-crop-bv").textContent = String($("cal-crop-b").value);
+    updateAdminRangeLabels();
+    adminApplyFromUI("input:"+id);
   });
 });
+$("cal-anchor-y")?.addEventListener("change", () => adminApplyFromUI("anchor"));
 
-$("cal-apply")?.addEventListener("click", () => emitPlayerCard(readAdminCalib(), "apply"));
+$("cal-save")?.addEventListener("click", () => {
+  const pc = adminDraftPlayerCard || readAdminCalib();
+  saveLocalPlayerCard(pc);
+  flashSaved("cal-save-status");
+});
+
 $("cal-reset")?.addEventListener("click", () => {
   const def = { ...DEFAULT_PLAYER_CARD };
   fillAdminFrom(def);
-  emitPlayerCard(def, "reset");
+  updateAdminRangeLabels();
+  adminApplyPlayerCard(def, "reset");
 });
 
 $("cal-preset-desktop")?.addEventListener("click", () => {
-  const preset = { cardWidthPx: 520, cardHeightPx: 520, cropBottomPx: 60, anchorY: "top" };
+  const preset = { cardWidthPx: 520, cardHeightPx: 520, cropSidePx: 0, cropBottomPx: 60, anchorY: "top", scale: 1.0 };
   fillAdminFrom(preset);
-  emitPlayerCard(preset, "preset:desktop");
+  updateAdminRangeLabels();
+  adminApplyPlayerCard(preset, "preset:desktop");
 });
 $("cal-preset-mobile")?.addEventListener("click", () => {
-  const preset = { cardWidthPx: 360, cardHeightPx: 420, cropBottomPx: 70, anchorY: "top" };
+  const preset = { cardWidthPx: 360, cardHeightPx: 420, cropSidePx: 0, cropBottomPx: 70, anchorY: "top", scale: 0.85 };
   fillAdminFrom(preset);
-  emitPlayerCard(preset, "preset:mobile");
+  updateAdminRangeLabels();
+  adminApplyPlayerCard(preset, "preset:mobile");
 });
 
-// Load local calibration on startup (host preview even before room)
+refreshCalibRangesSoon();
 const localPc = loadLocalPlayerCard();
 if(localPc) {
   fillAdminFrom(localPc);
@@ -819,7 +942,6 @@ if(localPc) {
 
 // Show calibration TikTok embed inside admin panel
 renderCalibrationPreview();
-});
 
 function parseTasks(){
   const total = Number($("host-total-rounds").value || 5);
@@ -1098,6 +1220,10 @@ socket.on("room-status", (st) => {
       }
     }
 
+    // Re-apply per-device TikTok box vars after re-render (new iframes)
+    try{ applyPlayerCardVars(loadLocalPlayerCard()||DEFAULT_PLAYER_CARD, "host:memes-render"); }catch(e){}
+    try{ applyTTVars("host:memes-render"); }catch(e){}
+
     // "Start vote" button visibility/enable
     if ($("host-start-vote")){
       const canShow = (st.phase === "collect");
@@ -1111,11 +1237,6 @@ socket.on("room-status", (st) => {
   // player view task
   if (playerState.joined && st?.roomCode === playerState.roomCode){
     if (st.task) $("player-task").textContent = st.task;
-  }
-
-  // Apply player card calibration coming from server (host sets it)
-  if(st?.playerCard){
-    try{ applyPlayerCardVars(st.playerCard, "room-status"); }catch(e){}
   }
 
   // Legacy: keep TT transforms neutral
