@@ -5,6 +5,30 @@ const SERVER_URL = window.location.origin;
 // TikTok calibration video (used in Admin mode preview)
 const CALIBRATION_TIKTOK_URL = "https://www.tiktok.com/@prokendol112/video/7508817190636752146?is_from_webapp=1&sender_device=pc&web_id=7584888569203066390";
 
+// === AI tasks presets ===
+const AI_PRESET_THEMES = [
+  "Аниме", "Фильмы", "Сериалы", "Видеоигры", "Комиксы/супергерои",
+  "Работа/офис", "Учёба/универ", "Отношения", "Свидания", "Друзья",
+  "Семья", "Питомцы", "Еда", "Кофе/энергетики", "Спорт/зал",
+  "ЗОЖ/диеты", "Сон", "Утро/понедельник", "Праздники", "Путешествия",
+  "Транспорт", "Быт/дом", "Шопинг", "Деньги", "Технологии",
+  "Телефоны/гаджеты", "Интернет/соцсети", "Геймерская боль", "Неловкие ситуации", "Фейлы",
+  "Успех/мотивация", "Прокрастинация", "Баги/глюки", "Кринж", "Сарказм",
+  "Абсурд", "Чёрный юмор", "Хоррор", "Фантастика", "Мистика",
+  "История/школа", "Музыка", "Концерты/тусовки", "Мода/стиль", "Погода",
+  "Кулинария", "Ностальгия", "Жизнь в Чехии", "Я и мои планы", "Внутренний диалог"
+];
+
+let aiState = {
+  enabled: false,
+  humorLevel: 3,
+  selectedThemes: [],
+  customThemes: [],
+  lastGenerated: [],
+  lastUsage: null,
+  lastModel: null,
+};
+
 const $ = (id) => document.getElementById(id);
 
 // Small helper for +/- buttons around range inputs
@@ -646,7 +670,7 @@ setTimeout(() => {
 }, 0);
 
 // -------- Screen switching
-const screens = ["mode","host","player"].reduce((acc,k)=>{
+const screens = ["mode","host","player","admin"].reduce((acc,k)=>{
   acc[k] = $(`screen-${k}`);
   return acc;
 }, {});
@@ -663,6 +687,7 @@ function showScreen(name){
 }
 $("btn-mode-host")?.addEventListener("click", () => showScreen("host"));
 $("btn-mode-player")?.addEventListener("click", () => showScreen("player"));
+$("btn-mode-admin")?.addEventListener("click", () => showScreen("admin"));
 
 // -------- Socket
 const socket = (typeof io === "function")
@@ -686,6 +711,7 @@ socket.on("connect", () => {
   pushDebug("socket", { event:"connect", id: socket.id });
   setPill("host-conn", true);
   setPill("player-conn", true);
+  setPill("admin-conn", true);
 
   // auto-rejoin for player if we have session and player screen visible
   const room = localStorage.getItem(LS_ROOM) || "";
@@ -698,6 +724,7 @@ socket.on("disconnect", (r) => {
   pushDebug("socket", { event:"disconnect", reason: r });
   setPill("host-conn", false);
   setPill("player-conn", false);
+  setPill("admin-conn", false);
 });
 
 // -------- Shared state
@@ -943,13 +970,299 @@ if(localPc) {
 // Show calibration TikTok embed inside admin panel
 renderCalibrationPreview();
 
+// === AI tasks UI + generation ===
+function aiGetRoundsLimit(){
+  const total = Number($("host-total-rounds")?.value || 5);
+  return Math.max(1, Math.min(20, total));
+}
+function aiAllThemes(){
+  const all = [...AI_PRESET_THEMES, ...(aiState.customThemes || [])].map(s => String(s||"").trim()).filter(Boolean);
+  // Unique, preserve order
+  const seen = new Set();
+  return all.filter(t => (seen.has(t.toLowerCase()) ? false : (seen.add(t.toLowerCase()), true)));
+}
+function aiGetSelectedThemes(){
+  const sel = (aiState.selectedThemes || []).map(s => String(s||"").trim()).filter(Boolean);
+  // Unique, preserve order
+  const seen = new Set();
+  return sel.filter(t => (seen.has(t.toLowerCase()) ? false : (seen.add(t.toLowerCase()), true)));
+}
+
+function aiUpdateCounters(){
+  $("ai-themes-limit") && ($("ai-themes-limit").textContent = String(aiGetRoundsLimit()));
+  $("ai-themes-count") && ($("ai-themes-count").textContent = String(aiGetSelectedThemes().length));
+}
+
+function aiSetStatus(text, mode){
+  const el = $("ai-status");
+  if(!el) return;
+  el.textContent = text;
+  el.classList.toggle("good", mode === "good");
+  el.classList.toggle("warn", mode === "warn");
+}
+
+function aiRenderThemeChips(){
+  const box = $("ai-themes");
+  if(!box) return;
+  const lim = aiGetRoundsLimit();
+  // If rounds decreased, drop extras
+  const sel = aiGetSelectedThemes().slice(0, lim);
+  aiState.selectedThemes = sel;
+
+  const all = aiAllThemes();
+  box.innerHTML = "";
+  const selectedLower = new Set(sel.map(s => s.toLowerCase()));
+  const selectedCount = sel.length;
+
+  for(const theme of all){
+    const isSelected = selectedLower.has(theme.toLowerCase());
+    const isCustom = (aiState.customThemes || []).some(t => String(t).toLowerCase() === String(theme).toLowerCase());
+    const disabled = !isSelected && selectedCount >= lim;
+
+    const chip = document.createElement("div");
+    chip.className = "themeChip" + (isSelected ? " selected" : "") + (disabled ? " disabled" : "");
+    chip.setAttribute("data-theme", theme);
+
+    const label = document.createElement("span");
+    label.textContent = theme;
+    chip.appendChild(label);
+
+    if(isCustom){
+      const x = document.createElement("span");
+      x.className = "x";
+      x.textContent = "×";
+      x.title = "Удалить тему";
+      x.addEventListener("click", (ev)=>{
+        ev.stopPropagation();
+        aiState.customThemes = (aiState.customThemes || []).filter(t => String(t).toLowerCase() !== String(theme).toLowerCase());
+        aiState.selectedThemes = aiGetSelectedThemes().filter(t => String(t).toLowerCase() !== String(theme).toLowerCase());
+        aiRenderThemeChips();
+        aiUpdateCounters();
+      });
+      chip.appendChild(x);
+    }
+
+    chip.addEventListener("click", ()=>{
+      if(disabled) return;
+      const cur = aiGetSelectedThemes();
+      const has = cur.some(t => t.toLowerCase() === theme.toLowerCase());
+      let next = cur;
+      if(has){
+        next = cur.filter(t => t.toLowerCase() !== theme.toLowerCase());
+      }else{
+        next = [...cur, theme];
+      }
+      aiState.selectedThemes = next.slice(0, lim);
+      aiRenderThemeChips();
+      aiUpdateCounters();
+    });
+
+    box.appendChild(chip);
+  }
+
+  aiUpdateCounters();
+}
+
+function aiSetEnabledUI(on){
+  const controls = $("ai-controls");
+  controls?.classList.toggle("hidden", !on);
+  aiSetStatus(on ? "вкл" : "выкл", on ? "good" : "");
+}
+
+function emitAsync(event, payload){
+  return new Promise((resolve)=> {
+    try{
+      socket.emit(event, payload, (res)=> resolve(res));
+    }catch(e){
+      resolve({ ok:false, error: String(e?.message || e) });
+    }
+  });
+}
+
+async function aiGenerateTasks(force = false){
+  const lim = aiGetRoundsLimit();
+  const themes = aiGetSelectedThemes();
+
+  if(themes.length === 0){
+    aiSetStatus("нет тем", "warn");
+    alert("Выбери хотя бы одну тему для ИИ.");
+    return { ok:false };
+  }
+  if(themes.length > lim){
+    aiSetStatus("слишком много тем", "warn");
+    alert("Тем не должно быть больше, чем раундов.");
+    return { ok:false };
+  }
+
+  // if already have enough tasks for current settings
+  if(!force && Array.isArray(aiState.lastGenerated) && aiState.lastGenerated.length >= lim){
+    return { ok:true, tasks: aiState.lastGenerated.slice(0, lim), cached:true };
+  }
+
+  aiSetStatus("генерация…");
+  $("ai-generate") && ($("ai-generate").disabled = true);
+
+  const res = await emitAsync("host-generate-tasks", {
+    roomCode: currentRoom,
+    totalRounds: lim,
+    themes,
+    humorLevel: Number($("ai-level")?.value || 3),
+  });
+
+  $("ai-generate") && ($("ai-generate").disabled = false);
+
+  if(!res?.ok){
+    aiSetStatus("ошибка", "warn");
+    $("ai-usage") && ($("ai-usage").textContent = `Ошибка: ${res?.error || "не удалось"}${res?.model ? (" | модель: " + res.model) : ""}${res?.details ? ("\n" + String(res.details).slice(0, 400)) : ""}\nЕсли ИИ не сработал — можно вписать задания вручную.`);
+    return { ok:false, error: res?.error };
+  }
+
+  aiState.lastGenerated = Array.isArray(res.tasks) ? res.tasks : [];
+  aiState.lastUsage = res.usage || null;
+  aiState.lastModel = res.model || null;
+
+  aiSetStatus("готово", "good");
+  $("ai-to-textarea") && ($("ai-to-textarea").disabled = !(aiState.lastGenerated.length));
+  if($("ai-usage")){
+    const u = aiState.lastUsage;
+    const t = u ? `Tokens: in ${u.input_tokens}, out ${u.output_tokens}, total ${u.total_tokens}` : "";
+    $("ai-usage").textContent = `${aiState.lastModel ? ("Модель: " + aiState.lastModel + ". ") : ""}${t}`;
+  }
+  return { ok:true, tasks: aiState.lastGenerated.slice(0, lim), usage: aiState.lastUsage };
+}
+
+function aiInit(){
+  // Only relevant on host screen
+  if(!$("ai-enabled")) return;
+
+  // Restore from localStorage
+  try{
+    const saved = JSON.parse(localStorage.getItem("mb_ai_state") || "null");
+    if(saved && typeof saved === "object"){
+      aiState.enabled = !!saved.enabled;
+      aiState.humorLevel = Number(saved.humorLevel || 3);
+      aiState.selectedThemes = Array.isArray(saved.selectedThemes) ? saved.selectedThemes : [];
+      aiState.customThemes = Array.isArray(saved.customThemes) ? saved.customThemes : [];
+    }
+  }catch(e){}
+
+  $("ai-enabled").checked = !!aiState.enabled;
+  $("ai-level") && ($("ai-level").value = String(aiState.humorLevel || 3));
+
+  aiSetEnabledUI(!!aiState.enabled);
+  aiRenderThemeChips();
+  aiUpdateCounters();
+
+  // events
+  $("ai-enabled").addEventListener("change", ()=>{
+    aiState.enabled = !!$("ai-enabled").checked;
+    aiSetEnabledUI(aiState.enabled);
+    aiPersist();
+  });
+
+  $("ai-level")?.addEventListener("change", ()=>{
+    aiState.humorLevel = Number($("ai-level").value || 3);
+    aiPersist();
+  });
+
+  $("host-total-rounds")?.addEventListener("input", ()=>{
+    // drop extra selected themes if rounds decreased
+    const lim = aiGetRoundsLimit();
+    aiState.selectedThemes = aiGetSelectedThemes().slice(0, lim);
+    aiRenderThemeChips();
+    aiUpdateCounters();
+    aiPersist();
+  });
+
+  $("ai-add-theme")?.addEventListener("click", ()=>{
+    const inp = $("ai-custom-theme");
+    const v = String(inp?.value || "").trim();
+    if(!v) return;
+    inp.value = "";
+    aiState.customThemes = aiAllThemes().includes(v) ? (aiState.customThemes || []) : [...(aiState.customThemes || []), v];
+    // auto-select
+    const cur = aiGetSelectedThemes();
+    if(!cur.some(t => t.toLowerCase() === v.toLowerCase())){
+      cur.push(v);
+      aiState.selectedThemes = cur.slice(0, aiGetRoundsLimit());
+    }
+    aiRenderThemeChips();
+    aiUpdateCounters();
+    aiPersist();
+  });
+
+  $("ai-clear-themes")?.addEventListener("click", ()=>{
+    aiState.selectedThemes = [];
+    aiState.customThemes = [];
+    aiState.lastGenerated = [];
+    aiState.lastUsage = null;
+    aiState.lastModel = null;
+    $("ai-to-textarea") && ($("ai-to-textarea").disabled = true);
+    $("ai-usage") && ($("ai-usage").textContent = "");
+    aiRenderThemeChips();
+    aiUpdateCounters();
+    aiPersist();
+  });
+
+  $("ai-random-themes")?.addEventListener("click", ()=>{
+    const lim = aiGetRoundsLimit();
+    const base = AI_PRESET_THEMES.slice();
+    // pick up to min(lim, 5) random themes
+    const pick = Math.max(1, Math.min(lim, 5));
+    const out = [];
+    while(out.length < pick && base.length){
+      const i = Math.floor(Math.random()*base.length);
+      out.push(base.splice(i,1)[0]);
+    }
+    aiState.selectedThemes = out;
+    aiRenderThemeChips();
+    aiUpdateCounters();
+    aiPersist();
+  });
+
+  $("ai-generate")?.addEventListener("click", async ()=>{
+    if(!currentRoom) return alert("Сначала создай комнату.");
+    await aiGenerateTasks(true);
+    aiPersist();
+  });
+
+  $("ai-to-textarea")?.addEventListener("click", ()=>{
+    if(!aiState.lastGenerated?.length) return;
+    $("host-tasks").value = aiState.lastGenerated.join("\n");
+  });
+
+  function aiPersist(){
+    try{
+      localStorage.setItem("mb_ai_state", JSON.stringify({
+        enabled: aiState.enabled,
+        humorLevel: aiState.humorLevel,
+        selectedThemes: aiGetSelectedThemes(),
+        customThemes: aiState.customThemes || [],
+      }));
+    }catch(e){}
+  }
+}
+// === END AI tasks ===
+
+
 function parseTasks(){
   const total = Number($("host-total-rounds").value || 5);
   const raw = String($("host-tasks").value || "");
-  const tasks = raw.split("\n").map(s=>s.trim()).filter(Boolean);
+  const tasks = raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+
   hostState.totalRounds = Math.max(1, Math.min(20, total));
   hostState.tasks = tasks;
+
+  // AI toggle state lives on the host device
+  aiState.enabled = !!$("ai-enabled")?.checked;
+  aiState.humorLevel = Number($("ai-level")?.value || 3);
+
+  // If we already generated tasks for current settings, use them (fallback is manual tasks)
+  if(aiState.enabled && Array.isArray(aiState.lastGenerated) && aiState.lastGenerated.length){
+    hostState.tasks = aiState.lastGenerated.slice(0, hostState.totalRounds);
+  }
 }
+
 function getTaskForRound(n){
   if (hostState.tasks.length === 0) return `Раунд ${n}`;
   return hostState.tasks[(n-1) % hostState.tasks.length];
@@ -962,9 +1275,19 @@ function ensureRoom(){
   return true;
 }
 
-$("host-start-game")?.addEventListener("click", () => {
+$("host-start-game")?.addEventListener("click", async () => {
   if(!ensureRoom()) return;
   parseTasks();
+
+  // If AI is enabled: generate (or reuse) tasks before starting the game.
+  if(aiState.enabled){
+    const r = await aiGenerateTasks(false);
+    if(r?.ok){
+      aiState.lastGenerated = r.tasks || [];
+      hostState.tasks = (r.tasks || []).slice(0, hostState.totalRounds);
+    }
+  }
+
   hostState.round = 1;
   hostState.scores = {};
   hostUpdateRoundInfo();
@@ -979,6 +1302,7 @@ $("host-start-game")?.addEventListener("click", () => {
     $("host-start-vote").disabled = true;
   });
 });
+
 
 $("host-start-vote")?.addEventListener("click", () => {
   if(!ensureRoom()) return;
@@ -1094,8 +1418,10 @@ $("host-new-game")?.addEventListener("click", () => {
 
 // -------- Player UI
 const urlRoom = new URLSearchParams(location.search).get("room") || "";
-$("player-room").value = (urlRoom || localStorage.getItem(LS_ROOM) || "").toUpperCase();
-$("player-nick").value = (localStorage.getItem(LS_NICK) || "");
+const pr = $("player-room");
+if (pr) pr.value = (urlRoom || localStorage.getItem(LS_ROOM) || "").toUpperCase();
+const pn = $("player-nick");
+if (pn) pn.value = (localStorage.getItem(LS_NICK) || "");
 $("player-room")?.addEventListener("input", () => $("player-room").value = $("player-room").value.toUpperCase());
 $("player-nick")?.addEventListener("change", () => {
   const v = $("player-nick").value.trim().slice(0,24);
@@ -1317,6 +1643,1213 @@ socket.on("room-closed", ({ roomCode }) => {
     location.href = location.origin;
   }
 });
+
+
+
+// -------- App version (visible)
+async function loadAppVersion(){
+  try{
+    const r = await fetch("/api/version", { cache:"no-store" });
+    const j = await r.json();
+    if(j && j.version && $("app-version")) $("app-version").textContent = j.version;
+  }catch(e){}
+}
+loadAppVersion();
+
+
+// -------- Admin dashboard (simple)
+const LS_ADMIN_TOKEN = "mb_admin_token_v1";
+const adminState = {
+  token: localStorage.getItem(LS_ADMIN_TOKEN) || "",
+  authed: false,
+  tab: "overview",
+  last: null,
+  pollTimer: null,
+};
+
+function h(s){
+  return String(s ?? "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#39;");
+}
+
+function adminVisible(){
+  const el = screens?.admin;
+  return !!el && !el.classList.contains("hidden");
+}
+
+function adminSetStatus(msg){
+  const el = $("admin-status");
+  if(el) el.textContent = msg || "";
+}
+
+function adminSetAuthed(on){
+  adminState.authed = !!on;
+  $("admin-body")?.classList.toggle("hidden", !adminState.authed);
+  $("admin-login")?.classList.toggle("hidden", adminState.authed);
+  $("admin-logout")?.classList.toggle("hidden", !adminState.authed);
+}
+
+async function adminApi(path, opts = {}){
+  const headers = Object.assign({}, opts.headers || {});
+  headers["x-admin-token"] = adminState.token || "";
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers: Object.assign({ "content-type":"application/json" }, headers),
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+    cache: "no-store",
+  });
+  const json = await res.json().catch(()=>({ ok:false, error:"E_BAD_JSON" }));
+  if(!res.ok) return { ok:false, status: res.status, ...json };
+  return json;
+}
+
+function fmtUptime(sec){
+  sec = Number(sec||0);
+  const h = Math.floor(sec/3600);
+  const m = Math.floor((sec%3600)/60);
+  const s = Math.floor(sec%60);
+  return (h? `${h}ч `:"") + (m? `${m}м `:"") + `${s}с`;
+}
+
+function renderStats(data){
+  const box = $("admin-stats");
+  if(!box) return;
+  box.innerHTML = "";
+
+  const cards = [
+    ["Версия", data.version || "—", data.serverTime || ""],
+    ["Uptime", fmtUptime(data.uptimeSec), ""],
+    ["Socket online", data.socketsOnline, ""],
+    ["Комнат", data.roomsActive, `в игре: ${data.gamesInProgress}`],
+    ["API req", data.totals?.httpApiRequests ?? 0, ""],
+    ["Создано комнат", data.totals?.roomsCreated ?? 0, ""],
+    ["Входов", data.totals?.playerJoins ?? 0, ""],
+    ["Мемов", data.totals?.memesSubmitted ?? 0, ""],
+    ["Голосов", data.totals?.votesCast ?? 0, ""],
+    ["Ошибок", data.totals?.errors ?? 0, "включая user errors"],
+  ];
+
+  for(const [k,v,s] of cards){
+    const el = document.createElement("div");
+    el.className = "statcard";
+    el.innerHTML = `<div class="k">${h(k)}</div><div class="v">${h(v)}</div>${s?`<div class="s">${h(s)}</div>`:""}`;
+
+    // Click on "Ошибок" -> open debug modal
+    if(String(k).toLowerCase().includes("ошиб")){
+      el.classList.add("clickable");
+      el.title = "Показать детали ошибок";
+      el.addEventListener("click", () => adminOpenErrorsModal());
+    }
+
+    box.appendChild(el);
+  }
+}
+
+function renderEvents(list, targetId){
+  const box = $(targetId);
+  if(!box) return;
+  const events = Array.isArray(list) ? list : [];
+  box.innerHTML = events.slice(0, 120).map(e => {
+    const t = e.ts ? String(e.ts).replace("T"," ").replace("Z","") : "";
+    return `<div class="logline"><span class="code">${h(t)}</span> · <b>${h(e.tag)}</b> — ${h(JSON.stringify(e.detail||{}))}</div>`;
+  }).join("") || `<div class="muted">нет событий</div>`;
+}
+
+function renderActivity(data){
+  const box = $("admin-activity");
+  if(!box) return;
+  const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+  const active = rooms.filter(r => r.phase === "collect" || r.phase === "vote").slice(0, 8);
+  box.innerHTML = active.map(r => {
+    return `<div class="pl" data-room="${h(r.code)}">
+      <div><b class="code">${h(r.code)}</b> · ${h(r.phase)} · раунд ${h(r.roundNumber)}</div>
+      <div class="muted">${h(r.playersOnline)}/${h(r.playersTotal)} · мемов ${h(r.memesCount)}</div>
+    </div>`;
+  }).join("") || `<div class="muted">нет активных игр</div>`;
+
+  // allow quick open
+  box.querySelectorAll("[data-room]").forEach(el=>{
+    el.style.cursor="pointer";
+    el.addEventListener("click", ()=> adminOpenRoom(el.getAttribute("data-room")));
+  });
+}
+
+function renderRoomsList(rooms){
+  const box = $("admin-rooms");
+  if(!box) return;
+  const list = Array.isArray(rooms) ? rooms : [];
+  box.innerHTML = list.map(r => {
+    const t = r.updatedAt ? new Date(Number(r.updatedAt)).toLocaleString() : "";
+    return `<div class="pl" data-room="${h(r.code)}">
+      <div>
+        <b class="code">${h(r.code)}</b> · ${h(r.phase)} · раунд ${h(r.roundNumber)}
+        <div class="muted">${h(r.task || "")}</div>
+      </div>
+      <div class="muted">${h(r.playersOnline)}/${h(r.playersTotal)} · мемов ${h(r.memesCount)}${t?`<div class="muted">${h(t)}</div>`:""}</div>
+    </div>`;
+  }).join("") || `<div class="muted">нет комнат</div>`;
+
+  box.querySelectorAll("[data-room]").forEach(el=>{
+    el.style.cursor="pointer";
+    el.addEventListener("click", ()=> adminOpenRoom(el.getAttribute("data-room")));
+  });
+}
+
+function renderSandbox(sb){
+  const list = sb?.rooms || [];
+  const box = $("admin-sb-list");
+  if(!box) return;
+
+  box.innerHTML = list.map(r => {
+    const players = Array.isArray(r.players) ? r.players.length : 0;
+    const memes = Array.isArray(r.memes) ? r.memes.length : 0;
+    return `<div class="pl" data-sb="${h(r.code)}">
+      <div>
+        <b class="code">${h(r.code)}</b> · ${h(r.phase)} · раунд ${h(r.roundNumber)}
+        <div class="muted">${h(r.task || "")}</div>
+      </div>
+      <div class="muted">${h(players)} players · ${h(memes)} memes</div>
+    </div>`;
+  }).join("") || `<div class="muted">песочница пуста</div>`;
+
+  box.querySelectorAll("[data-sb]").forEach(el=>{
+    el.style.cursor = "pointer";
+    el.addEventListener("click", ()=>{
+      const code = el.getAttribute("data-sb");
+      const r = list.find(x => String(x.code) === String(code));
+      if(!r) return;
+      // reuse room overlay
+      $("admin-room-title").textContent = `Песочница ${h(r.code)} · ${h(r.phase)}`;
+      const players = Array.isArray(r.players) ? r.players : [];
+      const memes = Array.isArray(r.memes) ? r.memes : [];
+      const playersHtml = players.map(p=>`<div class="pl"><div><b>${h(p.nickname||p.id)}</b> ${p.connected?`<span class="pill">online</span>`:""} ${p.hasMeme?`<span class="pill ok">meme</span>`:""} ${p.hasVoted?`<span class="pill ok">vote</span>`:""}</div><div class="muted">${h(p.id||"")}</div></div>`).join("") || `<div class="muted">нет игроков</div>`;
+      const memesHtml = memes.map(m=>`<div class="pl"><div><b>${h(m.nickname||"")}</b> · votes: ${h(m.votes||0)}<div class="muted">${h(m.caption||"")}</div></div><div class="muted">${h(m.urlPreview||"")}</div></div>`).join("") || `<div class="muted">нет мемов</div>`;
+      $("admin-room-detail").innerHTML = `
+        <div class="grid2">
+          <div class="panel"><h3>Игроки (${players.length})</h3><div class="list">${playersHtml}</div></div>
+          <div class="panel"><h3>Мемы (${memes.length})</h3><div class="list">${memesHtml}</div></div>
+        </div>
+        <div class="row" style="margin-top:10px; justify-content:flex-end">
+          <button class="ghost" id="admin-sb-copy-json" type="button">Copy JSON</button>
+        </div>
+      `;
+      $("admin-room-overlay").classList.remove("hidden");
+      setTimeout(()=>{
+        $("admin-sb-copy-json")?.addEventListener("click", async ()=>{
+          try{
+            await navigator.clipboard.writeText(JSON.stringify(r, null, 2));
+            adminSetStatus("Sandbox JSON скопирован");
+          }catch{}
+        });
+      },0);
+    });
+  });
+}
+
+function adminSetTab(tab){
+  adminState.tab = tab;
+  document.querySelectorAll("#screen-admin .tabbtn").forEach(b=>{
+    b.classList.toggle("active", b.getAttribute("data-tab") === tab);
+  });
+  ["overview","rooms","sandbox","logs"].forEach(t=>{
+    $("admin-tab-"+t)?.classList.toggle("hidden", t !== tab);
+  });
+
+  // render logs view (uses last events)
+  if(tab === "logs") adminRenderLogFiltered();
+}
+
+function adminRenderLogFiltered(){
+  const filter = String($("admin-log-filter")?.value || "").trim().toLowerCase();
+  const events = adminState.last?.events || [];
+  const filtered = !filter ? events : events.filter(e => JSON.stringify(e).toLowerCase().includes(filter));
+  renderEvents(filtered, "admin-log");
+}
+
+async function adminRefresh(){
+  const data = await adminApi("/api/admin/overview");
+  if(!data.ok){
+    adminSetStatus(data.error || data.errorCode || "Ошибка");
+    adminSetAuthed(false);
+    return null;
+  }
+  adminState.last = data;
+
+  renderStats(data);
+  renderActivity(data);
+  renderEvents(data.events, "admin-events");
+  renderSandbox(data.sandbox);
+  adminUpdateRoomCodesDatalist(data.rooms);
+  if(adminState.tab === "rooms") renderRoomsList(data.rooms);
+  if(adminState.tab === "logs") adminRenderLogFiltered();
+  return data;
+}
+
+function adminStartPolling(){
+  if(adminState.pollTimer) clearInterval(adminState.pollTimer);
+  adminState.pollTimer = setInterval(()=>{
+    if(!adminState.authed) return;
+    if(!adminVisible()) return;
+    adminRefresh().catch(()=>{});
+  }, 2000);
+}
+function adminStopPolling(){
+  if(adminState.pollTimer) clearInterval(adminState.pollTimer);
+  adminState.pollTimer = null;
+}
+
+async function adminLogin(){
+  adminState.token = String($("admin-token")?.value || "").trim();
+  if(!adminState.token){
+    adminSetStatus("Нужен token (см. ADMIN_TOKEN на сервере).");
+    return;
+  }
+  const data = await adminApi("/api/admin/overview");
+  if(!data.ok){
+    adminSetStatus("Не удалось войти: " + (data.error || data.errorCode || "ошибка"));
+    adminSetAuthed(false);
+    return;
+  }
+  localStorage.setItem(LS_ADMIN_TOKEN, adminState.token);
+  adminSetStatus("OK");
+  adminSetAuthed(true);
+  adminSetTab(adminState.tab || "overview");
+  adminStartPolling();
+  adminRefresh().catch(()=>{});
+}
+
+function adminLogout(){
+  adminState.authed = false;
+  adminState.token = "";
+  localStorage.removeItem(LS_ADMIN_TOKEN);
+  $("admin-token").value = "";
+  adminSetStatus("Вы вышли");
+  adminSetAuthed(false);
+  adminStopPolling();
+}
+
+async function adminOpenRoom(code){
+  if(!adminState.authed) return;
+  const data = await adminApi("/api/admin/room/" + encodeURIComponent(String(code||"").toUpperCase()));
+  if(!data.ok) return adminSetStatus("Комната не найдена");
+  const room = data.room;
+  $("admin-room-title").textContent = `Комната ${room.code} · ${room.phase}`;
+  const box = $("admin-room-detail");
+  const players = Array.isArray(room.players) ? room.players : [];
+  const memes = Array.isArray(room.memes) ? room.memes : [];
+
+  const playersHtml = players.map(p=>`<div class="pl"><div><b>${h(p.nickname)}</b> <span class="muted code">${h(p.id)}</span></div><div class="muted">${p.connected?"online":"off"} · meme:${p.hasMeme?"✓":"—"} · vote:${p.hasVoted?"✓":"—"} · score:${h(p.score)}</div></div>`).join("") || `<div class="muted">нет игроков</div>`;
+  const memesHtml = memes.map(m=>`<div class="pl"><div><b>${h(m.nickname)}</b> <span class="muted code">${h(m.id)}</span><div class="muted">${h(m.caption||"")}</div></div><div class="muted">votes: <b>${h(m.votes)}</b><div class="muted code">${h(m.urlPreview||"")}</div></div></div>`).join("") || `<div class="muted">нет мемов</div>`;
+
+  box.innerHTML = `
+    <div class="grid2">
+      <div class="panel">
+        <h3>Игроки (${players.length})</h3>
+        <div class="list">${playersHtml}</div>
+      </div>
+      <div class="panel">
+        <h3>Мемы (${memes.length})</h3>
+        <div class="list">${memesHtml}</div>
+      </div>
+    </div>
+  `;
+  $("admin-room-overlay").classList.remove("hidden");
+}
+
+function adminCloseRoom(){
+  $("admin-room-overlay").classList.add("hidden");
+}
+
+
+// ===== Admin errors modal =====
+function adminHumanError(code){
+  const c = String(code || "").trim().toUpperCase();
+  const map = {
+    "E_ADMIN_AUTH": {
+      title: "Неверный admin token",
+      explain: "Токен не совпадает с ADMIN_TOKEN на сервере. Проверь Secrets/ENV и перезапусти сервер."
+    },
+    "E_ROOM_NOT_FOUND": {
+      title: "Комната не найдена",
+      explain: "Код комнаты неверный или комната уже закрыта (ведущий вышел/сервер перезапустился)."
+    },
+    "E_NO_ROOM": { title:"Комната не найдена", explain:"Сессия комнаты не существует на сервере." },
+    "E_ROOM_LOCKED": { title:"Комната закрыта для новых игроков", explain:"Игра уже стартовала. Новые игроки не могут зайти с новым ником." },
+    "E_WRONG_PHASE": { title:"Неподходящая фаза", explain:"Действие не подходит к текущей фазе (lobby/collect/vote/finished)." },
+    "E_VOTE_NOT_STARTED": { title:"Голосование не началось", explain:"Сначала ведущий должен запустить голосование." },
+    "E_ALREADY_VOTED": { title:"Повторный голос", explain:"Игрок уже голосовал. По правилам это запрещено." },
+    "E_VOTE_OWN_MEME": { title:"Голос за свой мем", explain:"Нельзя голосовать за свой мем (проверка анти-чит)." },
+    "E_MEME_NOT_FOUND": { title:"Мем не найден", explain:"ID мема не существует или список мемов изменился." },
+    "E_NOT_HOST": { title:"Нет прав ведущего", explain:"Эту кнопку/действие может выполнять только ведущий." },
+    "E_NOT_IN_ROOM": { title:"Игрок не в комнате", explain:"Сокет/игрок не привязан к комнате или сессия потеряна." },
+    "E_BAD_DATA": { title:"Некорректные данные", explain:"Клиент отправил неполные/битые данные (поля пустые)." },
+    "E_NO_THEMES": { title:"Нет тем", explain:"Нужно выбрать хотя бы одну тему перед генерацией заданий." },
+    "E_TOO_MANY_THEMES": { title:"Слишком много тем", explain:"Тем не должно быть больше, чем раундов." },
+    "E_NO_OPENAI_KEY": { title:"Нет OpenAI API ключа", explain:"На сервере не задан OPENAI_API_KEY. Либо используй ручные задания." },
+    "E_OPENAI_TIMEOUT": { title:"OpenAI timeout", explain:"Сервер не успел дождаться ответа модели. Попробуй позже или уменьши сложность/кол-во раундов." },
+    "E_OPENAI_BAD_JSON": { title:"OpenAI вернул неожиданный формат", explain:"Модель вернула текст, который не удалось распарсить как JSON. Можно повторить запрос." },
+    "E_BAD_JSON": { title:"Плохой JSON от сервера", explain:"Клиент ожидал JSON, но получил другое. Проверь логи сервера/прокси." },
+  };
+
+  if(map[c]) return map[c];
+
+  if(c.startsWith("E_OPENAI")) return { title: "Проблема с OpenAI", explain: "Ошибка при запросе к модели. Посмотри details и логи сервера." };
+  if(c.startsWith("E_")) return { title: "Ошибка игры", explain: "Смотри errorText/details ниже — там обычно причина и контекст." };
+  return { title: "Неизвестная ошибка", explain: "Смотри raw details ниже." };
+}
+
+function adminExtractErrorEvents(events){
+  const arr = Array.isArray(events) ? events : [];
+  return arr.filter(e=>{
+    const tag = String(e?.tag || "").toLowerCase();
+    const code = e?.detail?.errorCode || e?.errorCode;
+    return tag === "error" || tag.includes("error") || !!code;
+  });
+}
+
+function adminGroupErrors(errors){
+  const m = new Map();
+  for(const e of (Array.isArray(errors) ? errors : [])){
+    const code = String(e?.detail?.errorCode || e?.errorCode || "E_UNKNOWN").toUpperCase();
+    const g = m.get(code) || { code, count:0, last:null, samples:[] };
+    g.count++;
+    if(!g.last || String(e.ts||"") > String(g.last.ts||"")) g.last = e;
+    if(g.samples.length < 3) g.samples.push(e);
+    m.set(code, g);
+  }
+  return Array.from(m.values()).sort((a,b)=> (b.count - a.count) || String(b.code).localeCompare(String(a.code)));
+}
+
+function adminFmtTs(ts){
+  if(!ts) return "";
+  return String(ts).replace("T"," ").replace("Z","");
+}
+
+async function adminOpenErrorsModal(){
+  if(!adminState.authed) return;
+  const modal = $("admin-errors-modal");
+  const body = $("admin-errors-body");
+  const title = $("admin-errors-title");
+  const hint = $("admin-errors-hint");
+  if(!modal || !body) return;
+
+  modal.classList.remove("hidden");
+  body.innerHTML = `<div class="muted">Загрузка…</div>`;
+
+  let errors = [];
+  try{
+    const r = await adminApi("/api/admin/errors?limit=200");
+    if(r?.ok && Array.isArray(r.errors)) errors = r.errors;
+  }catch(e){}
+
+  if(errors.length === 0){
+    errors = adminExtractErrorEvents(adminState.last?.events || []);
+  }
+
+  adminState.lastErrors = errors;
+
+  const groups = adminGroupErrors(errors);
+  if(title) title.textContent = `Ошибки (последние ${errors.length})`;
+  const total = adminState.last?.totals?.errors;
+  if(hint) hint.textContent = `Счётчик ошибок: ${total ?? "—"} · здесь показаны последние события ошибок (debug). Нажми на строку, чтобы раскрыть детали.`;
+
+  if(groups.length === 0){
+    body.innerHTML = `<div class="muted">ошибок нет</div>`;
+    return;
+  }
+
+  body.innerHTML = groups.map(g=>{
+    const last = g.last || {};
+    const code = g.code;
+    const exp = adminHumanError(code);
+    const t = adminFmtTs(last.ts);
+    const errorText = last?.detail?.errorText || last?.errorText || "";
+    const details = last?.detail?.details || last?.details || "";
+    const sample = g.samples.map(s=>{
+      const st = adminFmtTs(s.ts);
+      const et = s?.detail?.errorText || s?.errorText || "";
+      const dd = s?.detail?.details || s?.details || "";
+      return `• ${st} — ${String(et||"").slice(0,140)}${dd?(" | "+String(dd).slice(0,160)):""}`;
+    }).join("\n");
+
+    return `<div class="errRow" data-code="${h(code)}">
+      <div class="top">
+        <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap">
+          <span class="count">${h(g.count)}</span>
+          <b class="code">${h(code)}</b>
+          <span class="muted">${h(t)}</span>
+        </div>
+        <div class="muted">${h(exp.title)}</div>
+      </div>
+      <div class="explain">${h(exp.explain)}</div>
+      <div class="msg">${h(errorText)}${details?("\n"+h(String(details).slice(0,500))):""}</div>
+      <div class="details"><b>Последние примеры:</b>\n${h(sample || "—")}</div>
+    </div>`;
+  }).join("");
+
+  body.querySelectorAll(".errRow").forEach(el=>{
+    el.addEventListener("click", ()=> el.classList.toggle("open"));
+  });
+}
+
+function adminCloseErrorsModal(){
+  $("admin-errors-modal")?.classList.add("hidden");
+}
+
+async function adminCopyErrorsJson(){
+  try{
+    const data = adminState.lastErrors || [];
+    await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+    adminSetStatus("Ошибки скопированы");
+  }catch(e){
+    adminSetStatus("Не получилось скопировать");
+  }
+}
+// ===== End admin errors modal =====
+
+
+async function adminSandboxGenerate(){
+  const rooms = Number($("admin-sb-rooms")?.value || 3);
+  const players = Number($("admin-sb-players")?.value || 4);
+  const memes = Number($("admin-sb-memes")?.value || 4);
+  const r = await adminApi("/api/admin/sandbox/generate", { method:"POST", body:{ rooms, players, memes } });
+  if(!r.ok){
+    $("admin-sb-status").textContent = "Ошибка генерации";
+    return;
+  }
+  $("admin-sb-status").textContent = "OK";
+  // refresh overview to pull sandbox list
+  adminRefresh().catch(()=>{});
+}
+
+async function adminSandboxReset(){
+  const r = await adminApi("/api/admin/sandbox/reset", { method:"POST", body:{} });
+  $("admin-sb-status").textContent = r.ok ? "Сброшено" : "Ошибка";
+  adminRefresh().catch(()=>{});
+}
+
+
+async function adminRtCall(endpoint, body, okText){
+  const roomCode = String($("admin-rt-code")?.value || "").trim().toUpperCase();
+  if(!roomCode){
+    $("admin-rt-status").textContent = "Нужен код комнаты";
+    return null;
+  }
+  const r = await adminApi("/api/admin/sandbox/real/" + endpoint, { method:"POST", body:{ roomCode, ...body } });
+  if(!r.ok){
+    $("admin-rt-status").textContent = "Ошибка: " + (r.error || "E_FAIL");
+    return null;
+  }
+  $("admin-rt-status").textContent = okText || "OK";
+  adminRefresh().catch(()=>{});
+  return r;
+}
+async function adminRtAddBots(){
+  const count = Number($("admin-rt-bots")?.value || 2);
+  const connected = !!$("admin-rt-bots-online")?.checked;
+  const r = await adminRtCall("add-bots", { count, connected }, `Боты добавлены: +${count}`);
+  if(r && r.added != null) $("admin-rt-status").textContent = `Боты добавлены: +${r.added}`;
+}
+async function adminRtFillMemes(){
+  await adminRtCall("fill-memes", { mode:"missing", overwrite:false }, "Мемы заполнены");
+}
+async function adminRtReveal(){
+  await adminRtCall("reveal", {}, "Показали мемы");
+}
+async function adminRtForceVote(){
+  await adminRtCall("force-vote", {}, "Фаза vote запущена");
+}
+async function adminRtAutoVote(){
+  const r = await adminRtCall("auto-vote", {}, "Голоса добавлены");
+  if(r && r.votes != null) $("admin-rt-status").textContent = `Авто-голоса: +${r.votes}`;
+}
+async function adminRtResetRound(){
+  await adminRtCall("reset-round", {}, "Раунд сброшен");
+}
+
+function adminUpdateRoomCodesDatalist(rooms){
+  const dl = $("admin-roomcodes");
+  if(!dl) return;
+  const list = Array.isArray(rooms) ? rooms : [];
+  dl.innerHTML = list.map(r=>`<option value="${h(r.code)}"></option>`).join("");
+}
+
+
+// ===== Admin Autotest (real sockets, real game flow) =====
+const adminAT = {
+  running: false,
+  mode: "auto",            // auto | step
+  stepIndex: 0,
+  cancelled: false,
+  roomCode: "",
+  hostSock: null,
+  botSocks: [],
+  botMeta: [],             // {nick, kind, socket, playerId}
+  history: [],             // {ts, level, title, detail, snapshot}
+  latestStatus: null,
+  votingMemes: null,
+  finalResults: null,
+  report: null,
+};
+
+function atNow(){
+  return new Date().toISOString();
+}
+function atSetStatus(msg){
+  const el = $("admin-at-status");
+  if(el) el.textContent = msg || "";
+}
+function atSetRoom(code){
+  adminAT.roomCode = String(code||"").toUpperCase();
+  const el = $("admin-at-room");
+  if(el) el.textContent = adminAT.roomCode || "—";
+}
+function atRender(){
+  const box = $("admin-at-history");
+  if(box){
+    const items = adminAT.history.slice().reverse();
+    box.innerHTML = items.map((x, i)=>{
+      const cls = x.level === "ok" ? "ok" : (x.level === "warn" ? "warn" : (x.level === "fail" ? "fail" : ""));
+      const title = h(x.title || "");
+      const t = h(x.ts || "");
+      const detail = h(x.detail || "");
+      const snap = x.snapshot ? h(JSON.stringify(x.snapshot)) : "";
+      return `<div class="testStep ${cls}" data-at-i="${i}">
+        <div><span class="t code">${t}</span> · <b>${title}</b></div>
+        <div class="d">${detail}${snap?`\n\nsnapshot:\n${snap}`:""}</div>
+      </div>`;
+    }).join("") || `<div class="muted">пока пусто</div>`;
+
+    box.querySelectorAll(".testStep").forEach(el=>{
+      el.addEventListener("click", ()=> el.classList.toggle("open"));
+    });
+  }
+
+  const pre = $("admin-at-report");
+  if(pre){
+    pre.textContent = adminAT.report ? JSON.stringify(adminAT.report, null, 2) : "—";
+  }
+
+  const copyBtn = $("admin-at-copy");
+  if(copyBtn) copyBtn.disabled = !adminAT.report;
+
+  const cancelBtn = $("admin-at-cancel");
+  if(cancelBtn) cancelBtn.disabled = !adminAT.running;
+}
+
+async function atCopyReport(){
+  try{
+    const txt = $("admin-at-report")?.textContent || "";
+    await navigator.clipboard.writeText(txt);
+    atSetStatus("Отчёт скопирован");
+  }catch(e){
+    atSetStatus("Не получилось скопировать");
+  }
+}
+
+function atClear(){
+  adminAT.history = [];
+  adminAT.report = null;
+  adminAT.latestStatus = null;
+  adminAT.votingMemes = null;
+  adminAT.finalResults = null;
+  atSetRoom("");
+  atSetStatus("Очищено");
+  atRender();
+}
+
+function atPush(level, title, detail, snapshot){
+  adminAT.history.push({
+    ts: atNow(),
+    level: level || "info",
+    title: String(title||""),
+    detail: detail ? String(detail) : "",
+    snapshot: snapshot || null
+  });
+  atRender();
+}
+
+function atDisconnectAll(){
+  try{ adminAT.hostSock?.disconnect?.(); }catch(e){}
+  try{ adminAT.botSocks.forEach(s=>{ try{s.disconnect();}catch(e){} }); }catch(e){}
+  adminAT.hostSock = null;
+  adminAT.botSocks = [];
+  adminAT.botMeta = [];
+}
+
+function atCancel(){
+  adminAT.cancelled = true;
+  atPush("warn", "cancel", "Остановлено пользователем");
+
+  // Force-close sockets so текущий шаг быстро упал с ошибкой/таймаутом.
+  atDisconnectAll();
+
+  atSetStatus("Остановлено");
+  atResetStepButton();
+  atRender();
+}
+
+
+function atDelay(ms){
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function atWaitConnect(sock, timeoutMs = 8000){
+  return new Promise((resolve, reject)=>{
+    if(sock.connected) return resolve();
+    const t = setTimeout(()=>{ cleanup(); reject(new Error("E_CONNECT_TIMEOUT")); }, timeoutMs);
+    function cleanup(){
+      clearTimeout(t);
+      sock.off("connect", onOk);
+      sock.off("connect_error", onErr);
+    }
+    function onOk(){ cleanup(); resolve(); }
+    function onErr(err){ cleanup(); reject(err || new Error("E_CONNECT_FAIL")); }
+    sock.on("connect", onOk);
+    sock.on("connect_error", onErr);
+  });
+}
+
+function atEmitCb(sock, eventName, payload, timeoutMs = 12000){
+  return new Promise((resolve, reject)=>{
+    let done = false;
+    const t = setTimeout(()=>{
+      if(done) return;
+      done = true;
+      reject(new Error("E_TIMEOUT_" + eventName));
+    }, timeoutMs);
+    try{
+      if(payload === undefined){
+        sock.emit(eventName, (res)=>{ if(done) return; done = true; clearTimeout(t); resolve(res); });
+      }else{
+        sock.emit(eventName, payload, (res)=>{ if(done) return; done = true; clearTimeout(t); resolve(res); });
+      }
+    }catch(e){
+      if(done) return;
+      done = true; clearTimeout(t);
+      reject(e);
+    }
+  });
+}
+
+// --- Test media samples ---
+function atSvgDataUrl(text){
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420">
+    <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ff"/><stop offset="1" stop-color="#f0f"/>
+    </linearGradient></defs>
+    <rect width="100%" height="100%" fill="url(#g)"/>
+    <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="48" font-family="Arial" fill="#000">${String(text||"BOT")}</text>
+  </svg>`;
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+const AT_GIF_1PX = "data:image/gif;base64,R0lGODlhAQABAPAAAP///wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==";
+
+async function atMakeTinyVideoDataUrl(){
+  // Tries to make a tiny WebM via MediaRecorder. Falls back to URL if browser blocks it.
+  const fallbackUrl = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+  try{
+    if(typeof MediaRecorder === "undefined") return fallbackUrl;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 160; canvas.height = 90;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "#0ff";
+    ctx.font = "20px Arial";
+    ctx.fillText("BOT VIDEO", 18, 50);
+
+    const stream = canvas.captureStream(15);
+    const mimeCandidates = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+    let mimeType = "";
+    for(const m of mimeCandidates){
+      if(MediaRecorder.isTypeSupported?.(m)){ mimeType = m; break; }
+    }
+    const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks = [];
+    rec.ondataavailable = (e)=>{ if(e.data && e.data.size) chunks.push(e.data); };
+    const stopped = new Promise((resolve)=> rec.onstop = resolve );
+
+    rec.start(120);
+    // animate 5 frames
+    for(let i=0;i<5;i++){
+      ctx.fillStyle = i%2 ? "#f0f" : "#0ff";
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(10+i*6, 10+i*3, 40, 20);
+      ctx.fillStyle = "#fff";
+      ctx.fillText("BOT VIDEO", 18, 50);
+      await atDelay(80);
+    }
+    rec.stop();
+    await stopped;
+
+    const blob = new Blob(chunks, { type: rec.mimeType || "video/webm" });
+    if(blob.size < 100) return fallbackUrl;
+
+    const dataUrl = await new Promise((resolve, reject)=>{
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error("E_FILE_READER"));
+      fr.onload = () => resolve(String(fr.result || ""));
+      fr.readAsDataURL(blob);
+    });
+    return dataUrl || fallbackUrl;
+  }catch(e){
+    return fallbackUrl;
+  }
+}
+
+function atBotPlan(){
+  // Covers: image file (data), gif file (data), video file (data/url), youtube link, tiktok link
+  return [
+    { nick: "Bot_IMG", kind: "image_data", make: async ()=>({ url: atSvgDataUrl("IMG"), caption: "BOT image (data)" }) },
+    { nick: "Bot_GIF", kind: "gif_data", make: async ()=>({ url: AT_GIF_1PX, caption: "BOT gif (data)" }) },
+    { nick: "Bot_VID", kind: "video_data_or_url", make: async ()=>({ url: await atMakeTinyVideoDataUrl(), caption: "BOT video" }) },
+    { nick: "Bot_YT", kind: "youtube_link", make: async ()=>({ url: "https://youtu.be/dQw4w9WgXcQ", caption: "BOT youtube link" }) },
+    { nick: "Bot_TT", kind: "tiktok_link", make: async ()=>({ url: "https://www.tiktok.com/@prokendol112/video/7508817190636752146", caption: "BOT tiktok link" }) },
+  ];
+}
+
+async function atSnapshotRoom(){
+  if(!adminState.authed || !adminAT.roomCode) return null;
+  const d = await adminApi("/api/admin/room/" + encodeURIComponent(adminAT.roomCode));
+  if(d && d.ok && d.room) return d.room;
+  return null;
+}
+
+function atEnsureNotCancelled(){
+  if(adminAT.cancelled) throw new Error("E_CANCELLED");
+}
+
+// Computes points: 10 pts per vote. Winner gets +20% bonus points for that round.
+function atComputeRoundScores(memes){
+  const out = {};
+  const list = Array.isArray(memes) ? memes : [];
+  for(const m of list){
+    const name = String(m.nickname || "");
+    const votes = Number(m.votes || 0);
+    out[name] = (out[name] || 0) + votes * 10;
+  }
+  // find winner(s)
+  let best = -1;
+  let winners = [];
+  for(const m of list){
+    const v = Number(m.votes || 0);
+    if(v > best){ best = v; winners = [m]; }
+    else if(v === best){ winners.push(m); }
+  }
+  // bonus only if single winner
+  if(winners.length === 1 && best > 0){
+    const w = winners[0];
+    const name = String(w.nickname || "");
+    const base = best * 10;
+    const bonus = Math.round(base * 0.2);
+    out[name] = (out[name] || 0) + bonus;
+  }
+  return out;
+}
+
+async function atCreateRoom(){
+  atEnsureNotCancelled();
+  atPush("info", "create_room", "Создаю комнату…");
+  const hostSock = io(location.origin, { transports:["websocket","polling"], forceNew:true });
+  adminAT.hostSock = hostSock;
+
+  hostSock.on("room-status", (st)=>{
+    if(st && st.roomCode && String(st.roomCode).toUpperCase() === adminAT.roomCode){
+      adminAT.latestStatus = st;
+    }
+  });
+  hostSock.on("voting-started", (payload)=>{ adminAT.votingMemes = payload?.memes || null; });
+  hostSock.on("game-finished", (payload)=>{ adminAT.finalResults = payload?.results || null; });
+
+  await atWaitConnect(hostSock);
+  const res = await atEmitCb(hostSock, "host-create-room", undefined, 8000);
+  if(!res?.ok) throw new Error(res?.error || "E_CREATE_ROOM");
+  atSetRoom(res.roomCode);
+  const snap = await atSnapshotRoom();
+  atPush("ok", "create_room", "Комната создана: " + res.roomCode, snap);
+  return res.roomCode;
+}
+
+async function atAddBots(){
+  atEnsureNotCancelled();
+  atPush("info", "bots_join", "Подключаю ботов…");
+  const plan = atBotPlan();
+  adminAT.botMeta = [];
+  adminAT.botSocks = [];
+  for(const b of plan){
+    const s = io(location.origin, { transports:["websocket","polling"], forceNew:true });
+    adminAT.botSocks.push(s);
+    await atWaitConnect(s);
+    const r = await atEmitCb(s, "player-join", { roomCode: adminAT.roomCode, nickname: b.nick }, 8000);
+    if(!r?.ok) throw new Error("E_BOT_JOIN_" + b.nick + ":" + (r?.error || ""));
+    adminAT.botMeta.push({ nick: b.nick, kind: b.kind, socket: s, playerId: r.playerId || "" });
+  }
+  const snap = await atSnapshotRoom();
+  atPush("ok", "bots_join", `Боты online: ${adminAT.botMeta.length}`, snap);
+  return adminAT.botMeta.length;
+}
+
+async function atGenerateTasks(rounds){
+  atEnsureNotCancelled();
+  const theme = String($("admin-at-theme")?.value || "").trim();
+  const themes = theme ? [theme] : ["тест", "мемы"];
+  atPush("info", "tasks", "Пробую сгенерировать задания…");
+  // Try AI tasks via host socket. If not available — fallback.
+  let tasks = [];
+  try{
+    const r = await atEmitCb(adminAT.hostSock, "host-generate-tasks", {
+      roomCode: adminAT.roomCode,
+      totalRounds: rounds,
+      themes,
+      humorLevel: 3,
+    }, 25000);
+    if(r?.ok && Array.isArray(r.tasks)) tasks = r.tasks;
+    if(tasks.length){
+      atPush("ok", "tasks", `ИИ‑задания: ${tasks.length}`);
+      return tasks;
+    }
+    // if not ok — warn and fall through
+    atPush("warn", "tasks", `ИИ не сработал: ${r?.error || r?.message || "fallback"}`);
+  }catch(e){
+    atPush("warn", "tasks", "ИИ не сработал (fallback): " + String(e?.message || e));
+  }
+  // Fallback tasks
+  const base = [
+    "Мем про баг, который появляется только на проде.",
+    "Когда ты уверен, что всё готово, но кнопки снова не нажимаются.",
+    "Тестировщик: «пофикси вот это», а ты уже пофиксил другое.",
+    "Когда тикток снова режется рамками.",
+    "Когда бот прислал мем лучше человека.",
+  ];
+  tasks = [];
+  for(let i=0;i<rounds;i++) tasks.push(base[i % base.length]);
+  atPush("ok", "tasks", `Фоллбек задания: ${tasks.length}`);
+  return tasks;
+}
+
+async function atPlayRound(roundNumber, taskText, totalScores){
+  atEnsureNotCancelled();
+  const roomCode = adminAT.roomCode;
+
+  atPush("info", "round_start", `Раунд ${roundNumber}: запускаю collect…`);
+  const rTask = await atEmitCb(adminAT.hostSock, "host-task-update", { roomCode, roundNumber, task: taskText }, 8000);
+  if(!rTask?.ok) throw new Error("E_TASK_UPDATE:" + (rTask?.error || ""));
+  await atDelay(250);
+
+  // Send memes (one per bot)
+  atPush("info", "send_memes", "Боты отправляют мемы…");
+  const plan = atBotPlan();
+  // Build payloads in parallel (video can be async)
+  const payloads = await Promise.all(plan.map(p=>p.make()));
+  for(let i=0;i<adminAT.botMeta.length;i++){
+    const bot = adminAT.botMeta[i];
+    const payload = payloads[i] || { url: atSvgDataUrl("BOT"), caption: "BOT" };
+    const rr = await atEmitCb(bot.socket, "player-send-meme", { roomCode, url: payload.url, caption: `${payload.caption} · r${roundNumber}` }, 12000);
+    if(!rr?.ok) throw new Error("E_SEND_MEME_" + bot.nick + ":" + (rr?.error || ""));
+  }
+  await atDelay(350);
+  const snapAfterMemes = await atSnapshotRoom();
+  atPush("ok", "send_memes", `Мемы отправлены: ${adminAT.botMeta.length}`, snapAfterMemes);
+
+  // Start voting
+  atPush("info", "start_vote", "Запускаю vote…");
+  const rv = await atEmitCb(adminAT.hostSock, "host-start-vote", { roomCode }, 8000);
+  if(!rv?.ok) throw new Error("E_START_VOTE:" + (rv?.error || ""));
+  await atDelay(300);
+
+  // Get memes list
+  const roomSnapVote = await atSnapshotRoom();
+  const memes = Array.isArray(roomSnapVote?.memes) ? roomSnapVote.memes : (adminAT.votingMemes || []);
+  if(!memes || !memes.length){
+    atPush("warn", "vote", "Не вижу список мемов (но продолжаю).", roomSnapVote);
+  }
+
+  // Bots vote (not for their own)
+  atPush("info", "vote", "Боты голосуют…");
+  for(const bot of adminAT.botMeta){
+    const choices = (memes || []).filter(m => String(m.ownerId) !== String(bot.playerId));
+    if(!choices.length) continue;
+    const pick = choices[Math.floor(Math.random() * choices.length)];
+    const rr = await atEmitCb(bot.socket, "player-vote", { roomCode, memeId: pick.id }, 8000);
+    if(!rr?.ok) throw new Error("E_VOTE_" + bot.nick + ":" + (rr?.error || ""));
+  }
+  await atDelay(300);
+  const snapAfterVote = await atSnapshotRoom();
+  atPush("ok", "vote", "Голоса отправлены", snapAfterVote);
+
+  // Update scores from server state
+  const memesAfter = Array.isArray(snapAfterVote?.memes) ? snapAfterVote.memes : [];
+  const roundScores = atComputeRoundScores(memesAfter);
+  for(const [nick, pts] of Object.entries(roundScores)){
+    totalScores[nick] = (totalScores[nick] || 0) + pts;
+  }
+  atPush("ok", "round_score", `Счёт раунда посчитан (игроков: ${Object.keys(roundScores).length})`);
+}
+
+async function atFinishGame(totalScores){
+  atEnsureNotCancelled();
+  const roomCode = adminAT.roomCode;
+  const results = Object.entries(totalScores).map(([nickname, score])=>({ nickname, score }))
+    .sort((a,b)=>b.score-a.score);
+
+  atPush("info", "final", "Завершаю игру…");
+  const r = await atEmitCb(adminAT.hostSock, "host-final-results", { roomCode, results }, 8000);
+  if(!r?.ok) throw new Error("E_FINAL:" + (r?.error || ""));
+  await atDelay(300);
+  const snap = await atSnapshotRoom();
+  atPush("ok", "final", `Игра завершена. Результатов: ${results.length}`, snap);
+  return results;
+}
+
+async function atRunAuto(){
+  if(!adminState.authed){
+    atSetStatus("Сначала войди в админку.");
+    return;
+  }
+  if(adminAT.running) return;
+
+  adminAT.running = true;
+  adminAT.cancelled = false;
+  adminAT.mode = "auto";
+  adminAT.stepIndex = 0;
+  adminAT.history = [];
+  adminAT.report = null;
+  adminAT.votingMemes = null;
+  adminAT.finalResults = null;
+  adminAT.latestStatus = null;
+  atSetRoom("");
+  atRender();
+
+  const started = Date.now();
+  try{
+    atSetStatus("Автотест запущен…");
+    atDisconnectAll();
+
+    const rounds = Math.max(1, Math.min(5, Number($("admin-at-rounds")?.value || 1)));
+    const roomCode = await atCreateRoom();
+    await atAddBots();
+
+    const tasks = await atGenerateTasks(rounds);
+
+    const totalScores = {};
+    for(let r=1;r<=rounds;r++){
+      await atPlayRound(r, tasks[r-1] || `Тест‑задание #${r}`, totalScores);
+    }
+    const results = await atFinishGame(totalScores);
+
+    const overview = await adminApi("/api/admin/overview");
+    const events = Array.isArray(overview?.events) ? overview.events.filter(e => JSON.stringify(e.detail||{}).includes(roomCode)) : [];
+    const tookMs = Date.now() - started;
+
+    adminAT.report = {
+      ok: true,
+      mode: "auto",
+      roomCode,
+      rounds,
+      bots: adminAT.botMeta.map(b=>({ nick: b.nick, kind: b.kind })),
+      results,
+      tookMs,
+      serverEvents: events.slice(0, 80),
+    };
+    atSetStatus("✅ Готово. См. отчёт ниже.");
+    atPush("ok", "done", `Автотест завершён за ${tookMs} ms`);
+  }catch(e){
+    const tookMs = Date.now() - started;
+    const msg = String(e?.message || e);
+    adminAT.report = {
+      ok: false,
+      mode: "auto",
+      roomCode: adminAT.roomCode || "",
+      rounds: Number($("admin-at-rounds")?.value || 1),
+      error: msg,
+      tookMs,
+    };
+    atSetStatus("❌ Ошибка: " + msg);
+    atPush("fail", "error", msg, await atSnapshotRoom());
+  }finally{
+    adminAT.running = false;
+    // keep sockets for inspection if not cancelled; but to avoid leaking, disconnect after short delay
+    setTimeout(()=>{ try{ atDisconnectAll(); }catch(e){} }, 800);
+    atRender();
+  }
+}
+
+const AT_STEPS = [
+  { id:"create_room", name:"Создать комнату", run: async (ctx)=>{ ctx.roomCode = await atCreateRoom(); } },
+  { id:"bots", name:"Подключить ботов", run: async ()=>{ await atAddBots(); } },
+  { id:"tasks", name:"Сгенерировать задания", run: async (ctx)=>{ ctx.tasks = await atGenerateTasks(ctx.rounds); } },
+  { id:"round", name:"Пройти раунды", run: async (ctx)=>{
+      ctx.totalScores = ctx.totalScores || {};
+      for(let r=1;r<=ctx.rounds;r++){
+        await atPlayRound(r, (ctx.tasks && ctx.tasks[r-1]) || `Тест‑задание #${r}`, ctx.totalScores);
+      }
+    }
+  },
+  { id:"finish", name:"Завершить игру", run: async (ctx)=>{
+      ctx.results = await atFinishGame(ctx.totalScores || {});
+    }
+  },
+  { id:"report", name:"Сформировать отчёт", run: async (ctx)=>{
+      const overview = await adminApi("/api/admin/overview");
+      const events = Array.isArray(overview?.events) ? overview.events.filter(e => JSON.stringify(e.detail||{}).includes(ctx.roomCode || adminAT.roomCode)) : [];
+      adminAT.report = {
+        ok: true,
+        mode: "step",
+        roomCode: ctx.roomCode || adminAT.roomCode,
+        rounds: ctx.rounds,
+        bots: adminAT.botMeta.map(b=>({ nick:b.nick, kind:b.kind })),
+        results: ctx.results || null,
+        serverEvents: events.slice(0, 80),
+      };
+    }
+  },
+];
+
+const adminATStepCtx = { rounds: 1, roomCode:"", tasks:null, totalScores:null, results:null };
+
+async function atStep(){
+  if(!adminState.authed){
+    atSetStatus("Сначала войди в админку.");
+    return;
+  }
+  if(adminAT.running) return;
+
+  if(adminAT.stepIndex >= AT_STEPS.length){
+    atResetStepButton();
+    adminAT.stepIndex = 0;
+  }
+
+  if(adminATStepCtx.rounds == null){
+    adminATStepCtx.rounds = 1;
+  }
+  adminATStepCtx.rounds = Math.max(1, Math.min(5, Number($("admin-at-rounds")?.value || 1)));
+
+  // starting fresh if first step or previous finished
+  if(adminAT.stepIndex === 0){
+    atClear();
+    atDisconnectAll();
+    adminAT.cancelled = false;
+    adminAT.report = null;
+    adminATStepCtx.roomCode = "";
+    adminATStepCtx.tasks = null;
+    adminATStepCtx.totalScores = {};
+    adminATStepCtx.results = null;
+  }
+
+  adminAT.running = true;
+  adminAT.mode = "step";
+  atRender();
+
+  try{
+    atSetStatus(`Шаг ${adminAT.stepIndex+1}/${AT_STEPS.length}…`);
+    const step = AT_STEPS[adminAT.stepIndex];
+    if(!step){
+      atSetStatus("Пошаговый тест завершён.");
+      adminAT.running = false;
+      atRender();
+      return;
+    }
+    atPush("info", "step", `${adminAT.stepIndex+1}. ${step.name}`);
+
+    await step.run(adminATStepCtx);
+
+    if(step.id === "create_room"){
+      atSetRoom(adminATStepCtx.roomCode);
+    }
+
+    const snap = await atSnapshotRoom();
+    atPush("ok", "step_done", `${step.name} — OK`, snap);
+
+    adminAT.stepIndex++;
+    const done = adminAT.stepIndex >= AT_STEPS.length;
+    $("admin-at-step").textContent = done ? "✅ Готово" : "⏭ Следующий этап";
+    atSetStatus(done ? "✅ Пошаговый тест завершён." : "Готово. Нажми «Следующий этап».");
+  }catch(e){
+    const msg = String(e?.message || e);
+    atSetStatus("❌ Ошибка: " + msg);
+    atPush("fail", "step_error", msg, await atSnapshotRoom());
+  }finally{
+    adminAT.running = false;
+    atRender();
+  }
+}
+
+function atResetStepButton(){
+  const btn = $("admin-at-step");
+  if(btn) btn.textContent = "⏭ Пошаговый тест";
+  adminAT.stepIndex = 0;
+}
+
+// ===== End Admin Autotest =====
+
+
+// Wire up admin UI
+(function initAdminUI(){
+  const tokenInput = $("admin-token");
+  if(tokenInput) tokenInput.value = adminState.token || "";
+  $("admin-login")?.addEventListener("click", adminLogin);
+  $("admin-logout")?.addEventListener("click", adminLogout);
+  $("admin-back")?.addEventListener("click", () => { adminStopPolling(); showScreen("mode"); });
+  document.querySelectorAll("#screen-admin .tabbtn").forEach(btn=>{
+    btn.addEventListener("click", () => adminSetTab(btn.getAttribute("data-tab")));
+  });
+  $("admin-refresh-rooms")?.addEventListener("click", () => adminRefresh().catch(()=>{}));
+  $("admin-room-close")?.addEventListener("click", adminCloseRoom);
+  $("admin-room-overlay")?.addEventListener("click", (e)=>{ if(e.target?.id==="admin-room-overlay") adminCloseRoom(); });
+  // Errors modal
+  $("admin-errors-close")?.addEventListener("click", adminCloseErrorsModal);
+  $("admin-errors-modal")?.addEventListener("click", (e)=>{ if(e.target?.id==="admin-errors-modal") adminCloseErrorsModal(); });
+  $("admin-errors-copy")?.addEventListener("click", adminCopyErrorsJson);
+  $("admin-sb-generate")?.addEventListener("click", adminSandboxGenerate);
+  $("admin-sb-reset")?.addEventListener("click", adminSandboxReset);
+  $("admin-rt-add-bots")?.addEventListener("click", adminRtAddBots);
+  $("admin-rt-fill-memes")?.addEventListener("click", adminRtFillMemes);
+  $("admin-rt-reveal")?.addEventListener("click", adminRtReveal);
+  $("admin-rt-force-vote")?.addEventListener("click", adminRtForceVote);
+  $("admin-rt-auto-vote")?.addEventListener("click", adminRtAutoVote);
+  $("admin-rt-reset-round")?.addEventListener("click", adminRtResetRound);
+  // Autotest
+  $("admin-at-run")?.addEventListener("click", atRunAuto);
+  $("admin-at-step")?.addEventListener("click", atStep);
+  $("admin-at-cancel")?.addEventListener("click", atCancel);
+  $("admin-at-copy")?.addEventListener("click", atCopyReport);
+  $("admin-at-clear")?.addEventListener("click", ()=>{ atClear(); atResetStepButton(); });
+
+
+  $("admin-log-filter")?.addEventListener("input", adminRenderLogFiltered);
+  $("admin-copy-events")?.addEventListener("click", async ()=>{
+    try{
+      const data = adminState.last?.events || [];
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      adminSetStatus("Скопировано");
+    }catch(e){ adminSetStatus("Не получилось скопировать"); }
+  });
+
+  atRender();
+
+  // Auto-login when opening admin screen if token exists
+  const origShowScreen = showScreen;
+  showScreen = function(name){
+    origShowScreen(name);
+    if(name === "admin"){
+      if(adminState.token && !adminState.authed) adminLogin().catch(()=>{});
+      if(adminState.authed) adminStartPolling();
+    }else{
+      adminStopPolling();
+    }
+  };
+})();
+
+
+aiInit();
 
 // Start on mode screen
 showScreen("mode");

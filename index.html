@@ -11,7 +11,10 @@
 
   <div class="wrap">
     <header class="header">
-      <h1>Мем-баттл</h1>
+      <div class="row headerRow">
+        <h1>Мем-баттл</h1>
+        <div class="pill" id="app-version">beta</div>
+      </div>
       <p class="sub">Одна ссылка — и сервер, и фронт. Ведущий на ПК, игроки на телефонах.</p>
     </header>
 
@@ -21,6 +24,7 @@
         <div class="btns">
           <button id="btn-mode-host" class="primary">Я ведущий (экран для всех)</button>
           <button id="btn-mode-player" class="secondary">Я игрок (телефон)</button>
+          <button id="btn-mode-admin" class="ghost">Admin (панель)</button>
         </div>
         <p class="hint">Диагностика: кнопка <b>DEBUG</b> внизу справа или <code>?debug=1</code> в URL.</p>
       </section>
@@ -65,6 +69,59 @@
             <label>Задания (по одному на строку):
               <textarea id="host-tasks" rows="6" placeholder="Мем про...\nМем когда...\n..."></textarea>
             </label>
+<div class="aiBox">
+  <div class="row">
+    <h3>ИИ‑задания</h3>
+    <div class="pill" id="ai-status">выкл</div>
+  </div>
+
+  <label class="switch">
+    <input id="ai-enabled" type="checkbox" />
+    <span class="sw"></span>
+    <span>Генерировать задания через ИИ (ключ только на сервере)</span>
+  </label>
+
+  <div id="ai-controls" class="aiControls hidden">
+    <div class="grid2">
+      <div>
+        <label>Уровень юмора/абсурда:
+          <select id="ai-level">
+            <option value="1">1 — мягко</option>
+            <option value="2">2 — легко</option>
+            <option value="3" selected>3 — нормально</option>
+            <option value="4">4 — жёстко / тёмно</option>
+            <option value="5">5 — максимум абсурда</option>
+          </select>
+        </label>
+
+        <label>Своя тема (опционально):
+          <input id="ai-custom-theme" type="text" placeholder="Например: «Чешский быт»" />
+        </label>
+
+        <div class="btns">
+          <button id="ai-add-theme" class="secondary" type="button">Добавить тему</button>
+          <button id="ai-clear-themes" class="ghost" type="button">Сбросить</button>
+        </div>
+
+        <p class="muted">Выбери тем не больше, чем раундов. Темы просто подмешиваются — задания остаются общими и в одно предложение.</p>
+      </div>
+
+      <div>
+        <div class="row">
+          <div class="muted">Темы: <b id="ai-themes-count">0</b>/<b id="ai-themes-limit">5</b></div>
+          <button id="ai-random-themes" class="ghost" type="button">Случайно</button>
+        </div>
+        <div id="ai-themes" class="themeGrid"></div>
+      </div>
+    </div>
+
+    <div class="btns" style="margin-top:10px">
+      <button id="ai-generate" class="primary" type="button">Сгенерировать задания</button>
+      <button id="ai-to-textarea" class="secondary" type="button" disabled>Показать в поле заданий</button>
+    </div>
+    <div class="muted" id="ai-usage"></div>
+  </div>
+</div>
             <div class="btns">
               <button id="host-start-game" class="primary">Начать игру</button>
               <button id="host-next-round" class="secondary" disabled>Следующий раунд</button>
@@ -146,7 +203,206 @@
           <div id="player-final" class="results"></div>
         </div>
       </section>
-    </main>
+    
+      <section id="screen-admin" class="screen hidden">
+        <div class="row">
+          <h2>Админ</h2>
+          <div class="pill" id="admin-conn">offline</div>
+        </div>
+
+        <div class="panel">
+          <div class="row" style="justify-content:space-between; align-items:flex-end">
+            <div style="flex:1">
+              <label>Admin token:
+                <input id="admin-token" type="password" placeholder="token" autocomplete="off"/>
+              </label>
+              <div class="muted" id="admin-status"></div>
+            </div>
+            <div class="btns" style="margin-left:10px">
+              <button id="admin-login" class="primary" type="button">Войти</button>
+              <button id="admin-logout" class="ghost hidden" type="button">Выйти</button>
+              <button id="admin-back" class="secondary" type="button">Назад</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="admin-body" class="hidden">
+          <div class="tabs">
+            <button class="tabbtn active" data-tab="overview" id="admin-tabbtn-overview">Обзор</button>
+            <button class="tabbtn" data-tab="rooms" id="admin-tabbtn-rooms">Комнаты</button>
+            <button class="tabbtn" data-tab="sandbox" id="admin-tabbtn-sandbox">Песочница</button>
+            <button class="tabbtn" data-tab="logs" id="admin-tabbtn-logs">Логи</button>
+          </div>
+
+          <div id="admin-tab-overview" class="tabpane">
+            <div class="statgrid" id="admin-stats"></div>
+
+            <div class="grid2" style="margin-top:12px">
+              <div class="panel">
+                <h3>Активность</h3>
+                <div id="admin-activity" class="list"></div>
+              </div>
+              <div class="panel">
+                <h3>События (последние)</h3>
+                <div id="admin-events" class="log"></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="admin-tab-rooms" class="tabpane hidden">
+            <div class="row" style="justify-content:space-between">
+              <div class="muted">Кликни по комнате, чтобы посмотреть детали.</div>
+              <button id="admin-refresh-rooms" class="ghost" type="button">Обновить</button>
+            </div>
+            <div id="admin-rooms" class="list"></div>
+          </div>
+
+          
+          <div id="admin-tab-sandbox" class="tabpane hidden">
+            <div class="panel">
+              <h3>Автотест (реальная игра, настоящие боты)</h3>
+              <div class="muted">Создаёт тестовую комнату, подключает ботов, отправляет разные типы мемов (файл/ссылка), голосует и завершает игру. В конце — отчёт и история шагов.</div>
+
+              <div class="grid2" style="margin-top:10px">
+                <div>
+                  <div class="row" style="justify-content:space-between; gap:10px; flex-wrap:wrap">
+                    <label>Раундов:
+                      <input id="admin-at-rounds" type="number" min="1" max="5" value="1" style="width:90px"/>
+                    </label>
+                    <label style="flex:1; min-width:220px">Тема (опционально):
+                      <input id="admin-at-theme" type="text" placeholder="Напр.: «работа», «Чехия», «интернет»" />
+                    </label>
+                  </div>
+
+                  <div class="btns" style="flex-wrap:wrap; gap:8px; margin-top:10px">
+                    <button id="admin-at-run" class="primary" type="button">🚀 Быстрый автотест</button>
+                    <button id="admin-at-step" class="secondary" type="button">⏭ Пошаговый тест</button>
+                    <button id="admin-at-cancel" class="danger" type="button" disabled>Стоп</button>
+                  </div>
+
+                  <div class="row" style="margin-top:10px; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap">
+                    <div class="muted">Комната: <b class="code" id="admin-at-room">—</b></div>
+                    <div class="btns" style="gap:8px">
+                      <button id="admin-at-copy" class="ghost" type="button" disabled>Copy report</button>
+                      <button id="admin-at-clear" class="ghost" type="button">Clear</button>
+                    </div>
+                  </div>
+
+                  <div class="muted" id="admin-at-status" style="margin-top:6px"></div>
+                  <pre id="admin-at-report" class="testReport">—</pre>
+                </div>
+
+                <div>
+                  <h3 style="margin-top:0">История</h3>
+                  <div id="admin-at-history" class="testHistory"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel" style="margin-top:14px">
+              <h3>Быстрый тест (не влияет на реальные комнаты)</h3>
+              <div class="grid2">
+                <div>
+                  <label>Комнат:
+                    <input id="admin-sb-rooms" type="number" min="1" max="20" value="3"/>
+                  </label>
+                  <label>Игроков в комнате:
+                    <input id="admin-sb-players" type="number" min="1" max="12" value="4"/>
+                  </label>
+                  <label>Мемов в комнате:
+                    <input id="admin-sb-memes" type="number" min="0" max="12" value="4"/>
+                  </label>
+                  <div class="btns">
+                    <button id="admin-sb-generate" class="primary" type="button">Сгенерировать</button>
+                    <button id="admin-sb-reset" class="danger" type="button">Сбросить</button>
+                  </div>
+                  <div class="muted" id="admin-sb-status"></div>
+                </div>
+                <div>
+                  <h3 style="margin-top:0">Песочница</h3>
+                  <div id="admin-sb-list" class="list"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel" style="margin-top:14px">
+              <h3>Стенд для реальной комнаты (для теста / отладки)</h3>
+              <div class="muted">⚠️ Используй на тестовой комнате. Эти действия меняют состояние выбранной комнаты.</div>
+              <div class="grid2" style="margin-top:10px">
+                <div>
+                  <label>Код комнаты:
+                    <input id="admin-rt-code" type="text" placeholder="ABCD" style="text-transform:uppercase" list="admin-roomcodes"/>
+                  </label>
+                  <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:8px">
+                    <label style="display:flex; align-items:center; gap:8px">
+                      Ботов:
+                      <input id="admin-rt-bots" type="number" min="1" max="20" value="2" style="width:90px"/>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px">
+                      <input id="admin-rt-bots-online" type="checkbox" checked/>
+                      Боты online
+                    </label>
+                  </div>
+
+                  <div class="btns" style="flex-wrap:wrap; gap:8px; margin-top:10px">
+                    <button id="admin-rt-add-bots" class="primary" type="button">Добавить ботов</button>
+                    <button id="admin-rt-fill-memes" class="ghost" type="button">Заполнить мемы</button>
+                    <button id="admin-rt-reveal" class="ghost" type="button">Показать мемы</button>
+                    <button id="admin-rt-force-vote" class="primary" type="button">Начать vote</button>
+                    <button id="admin-rt-auto-vote" class="ghost" type="button">Авто-голоса</button>
+                    <button id="admin-rt-reset-round" class="danger" type="button">Сбросить раунд</button>
+                  </div>
+
+                  <div class="muted" id="admin-rt-status" style="margin-top:8px"></div>
+                </div>
+
+                <div>
+                  <h3 style="margin-top:0">Подсказка</h3>
+                  <div class="muted">
+                    1) Создай комнату как ведущий (обычным способом).<br/>
+                    2) Вставь код комнаты сюда.<br/>
+                    3) Добавь ботов, заполни мемы, запусти vote и проверь UI/логи.
+                  </div>
+                </div>
+              </div>
+
+              <datalist id="admin-roomcodes"></datalist>
+            </div>
+          </div>
+<div id="admin-tab-logs" class="tabpane hidden">
+            <div class="row" style="justify-content:space-between">
+              <input id="admin-log-filter" class="logfilter" placeholder="фильтр: tag, room, nick..." />
+              <button id="admin-copy-events" class="ghost" type="button">Copy JSON</button>
+            </div>
+            <div id="admin-log" class="log"></div>
+          </div>
+        </div>
+
+        <div id="admin-room-overlay" class="overlay hidden">
+          <div class="overlay-card wide">
+            <div class="row">
+              <h3 id="admin-room-title">Комната</h3>
+              <button id="admin-room-close" class="ghost">×</button>
+            </div>
+            <div id="admin-room-detail" class="admin-room-detail"></div>
+          </div>
+        </div>
+      </section>
+        <div id="admin-errors-modal" class="overlay hidden">
+          <div class="overlay-card wide">
+            <div class="row">
+              <h3 id="admin-errors-title">Ошибки</h3>
+              <div class="row" style="gap:8px">
+                <button id="admin-errors-copy" class="ghost" type="button">Copy JSON</button>
+                <button id="admin-errors-close" class="ghost" type="button">×</button>
+              </div>
+            </div>
+            <div class="muted" id="admin-errors-hint" style="margin-top:6px"></div>
+            <div id="admin-errors-body" class="errorsList"></div>
+          </div>
+        </div>
+
+</main>
   </div>
 
   
