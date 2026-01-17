@@ -671,3 +671,17 @@ select{
   overflow:auto;
   font-size: 12px;
 }
+/* --- Winner overlay: multiple winners (tie) --- */
+#winner-media.many{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+#winner-media .winner-item{
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  overflow: hidden;
+}
+#winner-caption .winner-line{
+  margin-top: 6px;
+}

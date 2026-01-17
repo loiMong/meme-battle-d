@@ -416,6 +416,7 @@ function createRoom(hostId) {
     task: "",
     locked: false,       // block new nicknames when game started
     memesRevealed: false,
+    voteComplete: false,
     playersById: Object.create(null),
     nickIndex: Object.create(null),
     socketToPlayerId: Object.create(null),
@@ -434,6 +435,7 @@ function playersArray(room) {
     id: p.id,
     nickname: p.nickname,
     connected: !!p.connected,
+      readyNext: !!p.readyNext,
     hasMeme: !!p.hasMeme,
     hasVoted: !!p.hasVoted,
   }));
@@ -451,6 +453,7 @@ function broadcast(room) {
     task: room.task,
     locked: !!room.locked,
     memesRevealed: !!room.memesRevealed,
+    voteComplete: !!room.voteComplete,
     memesCount: room.memes.length,
     players: playersArray(room),
     memes: publicMemes(room),
@@ -474,6 +477,66 @@ function checkAllMemesReady(room) {
   return active.every(p => p.hasMeme);
 }
 
+function checkAllVotesReady(room){
+  const active = Object.values(room.playersById).filter(p => p.connected);
+  if(active.length === 0) return false;
+  return active.every(p => p.hasVoted);
+}
+
+function startVoting(room, mode="host"){
+  room.memesRevealed = true;  // reveal memes to host & players
+  room.phase = "vote";
+  room.voteComplete = false;
+  room.updatedAt = Date.now();
+
+  // ensure votes numbers
+  room.memes = (room.memes || []).map(m => ({ ...m, votes: Number(m.votes || 0) }));
+
+  logAdmin("voting_started", { roomCode: room.code, mode });
+  io.to(room.code).emit("voting-started", { roomCode: room.code, memes: room.memes });
+}
+
+function maybeFinishVoting(room) {
+  if (!room) return;
+  if (room.phase !== "vote") return;
+  if (room.voteComplete) return;
+
+  const connectedPlayers = Object.values(room.playersById).filter(p => p.connected);
+  if (connectedPlayers.length === 0) return;
+
+  const allVoted = connectedPlayers.every(p => p.hasVoted);
+  if (!allVoted) return;
+
+  room.voteComplete = true;
+  // reset next-round ready flags
+  Object.values(room.playersById).forEach(p => { p.readyNext = false; });
+
+  // compute winner (best by votes)
+  let best = null;
+  for (const m of room.memes) {
+    const v = typeof m.votes === "number" ? m.votes : 0;
+    if (!best || v > (best.votes || 0)) best = m;
+  }
+  const winner = best ? {
+    memeId: best.memeId,
+    url: best.url || null,
+    caption: best.caption || "",
+    nickname: best.nickname || "",
+    votes: best.votes || 0,
+  } : null;
+
+  // allow results on players too
+  broadcastRoomStatus(room);
+
+  // signal clients
+  io.to(room.code).emit("voting-finished", {
+    roomCode: room.code,
+    roundNumber: room.roundNumber,
+    winner,
+  });
+}
+
+
 
 // ===== Admin API (token via header: x-admin-token) =====
 function requireAdmin(req, res){
@@ -484,6 +547,35 @@ function requireAdmin(req, res){
   }
   return true;
 }
+
+
+function maybeEmitAllReadyNext(room) {
+  if (!room) return;
+  if (room.phase !== "vote" || !room.voteComplete) return;
+  const connectedPlayers = Object.values(room.playersById).filter((p) => p.connected);
+  const total = connectedPlayers.length;
+  if (total <= 0) return;
+  const ready = connectedPlayers.filter((p) => p.readyNext).length;
+  if (ready >= total) {
+    // tell host to advance (host can ignore readiness anyway; this is the auto path)
+    if (room.hostId) {
+      io.to(room.hostId).emit("all-ready-next", {
+        roomCode: room.code,
+        roundNumber: room.roundNumber,
+        ready,
+        total,
+      });
+    }
+    // also broadcast for UI
+    io.to(room.code).emit("all-ready-next", {
+      roomCode: room.code,
+      roundNumber: room.roundNumber,
+      ready,
+      total,
+    });
+  }
+}
+
 
 function roomSummary(room){
   const players = Object.values(room.playersById || {});
@@ -513,6 +605,7 @@ function roomDetail(room){
       id: p.id,
       nickname: p.nickname,
       connected: !!p.connected,
+      readyNext: !!p.readyNext,
       hasMeme: !!p.hasMeme,
       hasVoted: !!p.hasVoted,
       lastSeen: p.lastSeen || null,
@@ -752,11 +845,10 @@ app.post("/api/admin/sandbox/real/fill-memes", (req, res) => {
     p.hasMeme = true;
   }
 
-  // if all connected players have memes, reveal to allow quick testing
-  if(!room.memesRevealed && checkAllMemesReady(room)){
-    room.memesRevealed = true;
-    io.to(room.hostId).emit("memes-ready", { roomCode: room.code, memesCount: room.memes.length });
-  }
+      // Auto-start voting when all connected players submitted their memes
+      if (room.phase === "collect" && checkAllMemesReady(room)) {
+        startVoting(room, "auto_all_memes");
+      }
 
   room.updatedAt = Date.now();
   incTotal("memesSubmitted", created);
@@ -785,6 +877,7 @@ app.post("/api/admin/sandbox/real/force-vote", (req, res) => {
 
   room.memesRevealed = true;
   room.phase = "vote";
+  room.voteComplete = false;
   // normalize votes
   room.memes = room.memes.map(m => ({ ...m, votes: Number(m.votes || 0) }));
   room.updatedAt = Date.now();
@@ -824,6 +917,7 @@ app.post("/api/admin/sandbox/real/auto-vote", (req, res) => {
   room.updatedAt = Date.now();
   incTotal("votesCast", votes);
   logAdmin("sandbox_auto_vote", { roomCode, votes });
+  maybeFinishVoting(room);
   res.json({ ok:true, votes });
   broadcast(room);
 });
@@ -835,6 +929,7 @@ app.post("/api/admin/sandbox/real/reset-round", (req, res) => {
   if(!room) return res.status(404).json({ ok:false, error:"E_ROOM_NOT_FOUND" });
 
   room.phase = "collect";
+  room.voteComplete = false;
   room.locked = true;
   room.memesRevealed = false;
   room.memes = [];
@@ -917,6 +1012,7 @@ socket.on("host-generate-tasks", async (payload, cb) => {
       room.task = String(payload?.task || "");
       logAdmin("round_task", { roomCode, roundNumber: room.roundNumber, task: String(room.task||"").slice(0, 140) });
       room.phase = "collect";
+      room.voteComplete = false;
       room.locked = true;
       room.memesRevealed = false;
       room.memes = [];
@@ -938,16 +1034,7 @@ socket.on("host-generate-tasks", async (payload, cb) => {
       if (!room) return cbErr(cb, "E_ROOM_NOT_FOUND", "Комната не найдена");
       if (!ensureHost(room, socket, cb)) return;
       if (room.phase !== "collect") return cbErr(cb, "E_WRONG_PHASE", "Голосование можно начать только во время сбора мемов");
-
-      room.memesRevealed = true;  // reveal memes to host & players
-      room.phase = "vote";
-      logAdmin("voting_started", { roomCode });
-      room.updatedAt = Date.now();
-
-      // ensure votes numbers
-      room.memes = room.memes.map(m => ({ ...m, votes: Number(m.votes || 0) }));
-
-      io.to(room.code).emit("voting-started", { roomCode: room.code, memes: room.memes });
+      startVoting(room, "host");
       cbOk(cb);
       broadcast(room);
     }catch{
@@ -1055,10 +1142,9 @@ socket.on("host-generate-tasks", async (payload, cb) => {
       incTotal("memesSubmitted", 1);
       logAdmin("meme_submitted", { roomCode, nickname: p.nickname, playerId: p.id });
 
-      // If all connected players submitted — reveal memes on host screen (but do NOT start voting automatically)
-      if (!room.memesRevealed && checkAllMemesReady(room)) {
-        room.memesRevealed = true;
-        io.to(room.hostId).emit("memes-ready", { roomCode: room.code, memesCount: room.memes.length });
+      // Auto-start voting when all connected players submitted their memes
+      if (room.phase === "collect" && checkAllMemesReady(room)) {
+        startVoting(room, "auto_all_memes");
       }
 
       broadcast(room);
@@ -1074,6 +1160,7 @@ socket.on("host-generate-tasks", async (payload, cb) => {
       const room = getRoom(roomCode);
       if (!room) return cbErr(cb, "E_ROOM_NOT_FOUND", "Комната не найдена");
       if (room.phase !== "vote") return cbErr(cb, "E_VOTE_NOT_STARTED", "Голосование не началось");
+      if (room.voteComplete) return cbErr(cb, "E_VOTE_CLOSED", "Голосование уже завершено");
 
       const p = getPlayer(room, socket);
       if (!p) return cbErr(cb, "E_NOT_IN_ROOM", "Вы не в комнате");
@@ -1089,11 +1176,30 @@ socket.on("host-generate-tasks", async (payload, cb) => {
       p.hasVoted = true;
       room.updatedAt = Date.now();
 
+
+      // If everyone voted — emit a clear "voting finished" signal
+      maybeFinishVoting(room);
+
       cbOk(cb);
       broadcast(room);
     } catch {
       cbErr(cb, "E_VOTE", "Ошибка голосования");
     }
+  })
+
+
+  socket.on("player-ready-next", ({ roomCode }, cb) => {
+    const room = rooms.get(roomCode);
+    if (!room) return cb && cb({ ok: false, error: "no_room" });
+    const player = room.playersById[socket.id];
+    if (!player) return cb && cb({ ok: false, error: "not_in_room" });
+    if (room.phase !== "vote" || !room.voteComplete) {
+      return cb && cb({ ok: false, error: "not_ready_phase" });
+    }
+    player.readyNext = true;
+    broadcastRoomStatus(room);
+    maybeEmitAllReadyNext(room);
+    return cb && cb({ ok: true });
   });
 
   socket.on("host-final-results", (payload, cb) => {
@@ -1129,12 +1235,14 @@ socket.on("host-generate-tasks", async (payload, cb) => {
       if (!ensureHost(room, socket, cb)) return;
 
       room.phase = "lobby";
+    Object.values(room.playersById).forEach((p) => { p.readyNext = false; });
       logAdmin("new_game", { roomCode });
       room.locked = false;
       room.roundNumber = 0;
       room.task = "";
       room.memes = [];
       room.memesRevealed = false;
+      room.voteComplete = false;
       Object.values(room.playersById).forEach(p => { p.hasMeme = false; p.hasVoted = false; p.score = 0; });
       room.updatedAt = Date.now();
 
@@ -1164,6 +1272,15 @@ socket.on("host-generate-tasks", async (payload, cb) => {
         room.playersById[pid].lastSeen = Date.now();
       }
       delete room.socketToPlayerId[socket.id];
+
+      // If someone left, we may become "all ready" or "all voted"
+      if (room.phase === "collect" && checkAllMemesReady(room)) {
+        startVoting(room, "auto_all_memes_disconnect");
+      }
+      if (room.phase === "vote") {
+        maybeFinishVoting(room);
+      }
+
       broadcast(room);
     } catch {}
   });

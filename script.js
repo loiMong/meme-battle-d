@@ -731,6 +731,158 @@ socket.on("disconnect", (r) => {
 let currentRoom = "";
 let hostState = { totalRounds: 5, tasks: [], round: 0, scores: {} };
 let playerState = { joined: false, playerId: "", nickname: "", roomCode: "" };
+let lastRoomStatus = null;
+let nextUiDelayDone = false;
+let nextUiRoundNumber = 0;
+let hostAutoNextLock = false;
+
+function updateNextRoundUI() {
+  const st = lastRoomStatus;
+  const hostReady = $("host-ready-next");
+  if (hostReady) {
+    if (st && st.voteComplete) {
+      const connected = (st.players || []).filter(p => p.connected);
+      const total = connected.length;
+      const ready = connected.filter(p => p.readyNext).length;
+      hostReady.textContent = `Готовы к следующему раунду: ${ready}/${total}`;
+      hostReady.classList.remove("hidden");
+    } else {
+      hostReady.classList.add("hidden");
+    }
+  }
+
+  const wrap = $("player-next-wrap");
+  const btn = $("player-next-round");
+  const wait = $("player-next-wait");
+  const isPlayerScreen = wrap && !screens.player.classList.contains("hidden");
+  if (wrap && btn && wait) {
+    if (isPlayerScreen && st && st.voteComplete && nextUiDelayDone) {
+      wrap.classList.remove("hidden");
+      const connected = (st.players || []).filter(p => p.connected);
+      const total = connected.length;
+      const ready = connected.filter(p => p.readyNext).length;
+      const me = (st.players || []).find(p => p.playerId === playerState.playerId);
+      const imReady = !!(me && me.readyNext);
+      btn.disabled = imReady;
+      btn.textContent = imReady ? "✅ Готов" : "Следующий раунд";
+      wait.textContent = total > 0 ? `Ожидание игроков: ${ready}/${total} готовы` : "";
+    } else {
+      wrap.classList.add("hidden");
+      btn.disabled = false;
+      btn.textContent = "Следующий раунд";
+      wait.textContent = "";
+    }
+  }
+}
+
+function showWinnerOverlay(payloadOrWinner = {}) {
+  const ov = $("winner-overlay");
+  if (!ov) return Promise.resolve();
+
+  // Accept both formats:
+  // 1) payload: { winners, winner, maxVotes, displayMs, tie }
+  // 2) direct winner object: { url, caption, nickname, votes }
+  const payload = (payloadOrWinner && (payloadOrWinner.winners || payloadOrWinner.winner || payloadOrWinner.maxVotes !== undefined || payloadOrWinner.displayMs !== undefined))
+    ? payloadOrWinner
+    : { winner: payloadOrWinner };
+
+  let winners = Array.isArray(payload.winners)
+    ? payload.winners
+    : (payload.winner ? [payload.winner] : []);
+
+  const displayMs = Number.isFinite(Number(payload.displayMs)) ? Number(payload.displayMs) : 3000;
+
+  // Build fallback meme map from latest room-status (revealed during vote) and host cache
+  const fallbackMemes = []
+    .concat(Array.isArray(lastRoomStatus?.memes) ? lastRoomStatus.memes : [])
+    .concat(Array.isArray(hostLatestMemes) ? hostLatestMemes : []);
+  const byId = new Map();
+  for (const m of fallbackMemes) {
+    const id = m && (m.id || m.memeId);
+    if (id) byId.set(String(id), m);
+  }
+
+  // If server didn't send winners but sent maxVotes, derive from fallback
+  if (winners.length === 0 && Number.isFinite(Number(payload.maxVotes)) && byId.size > 0) {
+    const mv = Number(payload.maxVotes);
+    winners = Array.from(byId.values())
+      .filter(m => Number(m?.votes || 0) === mv)
+      .map(m => ({ id: m.id || m.memeId, url: m.url || m.memeUrl, caption: m.caption || "", nickname: m.nickname || "", votes: Number(m.votes || 0) }));
+  }
+
+  const norm = (w) => {
+    if (!w) return null;
+    const id = w.id ?? w.memeId ?? null;
+    const src = id ? byId.get(String(id)) : null;
+    const url =
+      w.url || w.memeUrl || w.src || w.dataUrl ||
+      (src ? (src.url || src.memeUrl || src.src || src.dataUrl) : null);
+
+    const caption = (w.caption ?? (src ? src.caption : "")) || "";
+    const nickname = (w.nickname ?? (src ? src.nickname : "")) || "";
+    const votesRaw = (w.votes ?? (src ? src.votes : null));
+    const votes = Number.isFinite(Number(votesRaw)) ? Number(votesRaw) : 0;
+
+    return { id, url, caption, nickname, votes };
+  };
+
+  const list = winners.map(norm).filter(Boolean);
+
+  // Title
+  const titleEl = $("winner-title") || ov.querySelector(".overlay-title");
+  if (titleEl) {
+    const isTie = list.length > 1;
+    titleEl.textContent = isTie ? "Ничья — победители" : "Победитель раунда";
+  }
+
+  // Media render
+  const mediaBox = $("winner-media");
+  if (mediaBox) {
+    mediaBox.innerHTML = "";
+    if (list.length === 0) {
+      mediaBox.innerHTML = `<div class="muted">Нет данных</div>`;
+    } else if (list.length === 1) {
+      const w = list[0];
+      mediaBox.innerHTML = w.url ? renderMediaHTML(w.url) : `<div class="muted">Нет медиа</div>`;
+    } else {
+      list.forEach((w) => {
+        const item = document.createElement("div");
+        item.className = "winner-item";
+        item.innerHTML = w.url ? renderMediaHTML(w.url) : `<div class="muted">Нет медиа</div>`;
+        mediaBox.appendChild(item);
+      });
+    }
+    mediaBox.classList.toggle("many", list.length > 1);
+  }
+
+  // Caption lines
+  const capBox = $("winner-caption");
+  if (capBox) {
+    capBox.innerHTML = "";
+    if (list.length > 0) {
+      list.forEach((w) => {
+        const who = w.nickname ? `От: ${w.nickname}` : "";
+        const votes = Number.isFinite(Number(w.votes)) ? ` (${w.votes})` : "";
+        const line = [who ? `${who}${votes}` : "", w.caption || ""].filter(Boolean).join(" — ");
+        const row = document.createElement("div");
+        row.className = "winner-line";
+        row.textContent = line;
+        capBox.appendChild(row);
+      });
+    }
+  }
+
+  ov.classList.remove("hidden");
+  ov.setAttribute("aria-hidden", "false");
+
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      ov.classList.add("hidden");
+      ov.setAttribute("aria-hidden", "true");
+      resolve();
+    }, displayMs);
+  });
+}
 
 
 let hostLatestMemes = [];
@@ -1449,6 +1601,9 @@ function joinRoom(room, nick, silent=false){
     if (res.task) $("player-task").textContent = res.task;
     $("player-sent").classList.add("hidden");
     $("player-voted").classList.add("hidden");
+    $("player-vote-finished")?.classList.add("hidden");
+    $("host-vote-finished")?.classList.add("hidden");
+    $("player-vote-finished")?.classList.add("hidden");
   });
 }
 $("player-join")?.addEventListener("click", () => joinRoom($("player-room").value, $("player-nick").value));
@@ -1489,6 +1644,18 @@ $("player-send-meme")?.addEventListener("click", async () => {
     $("player-sent").classList.remove("hidden");
   });
 });
+$("player-next-round")?.addEventListener("click", () => {
+  if (!playerState.roomCode) return;
+  socket.emit("player-ready-next", { roomCode: playerState.roomCode }, (res) => {
+    if (!res || !res.ok) {
+      pushDebug("player-ready-next:fail", res || {});
+      return;
+    }
+    pushDebug("player-ready-next", { ok: true });
+    // UI updates via room-status
+  });
+});
+
 
 // -------- Live updates
 socket.on("memes-ready", (p) => {
@@ -1501,6 +1668,9 @@ socket.on("memes-ready", (p) => {
 });
 
 socket.on("room-status", (st) => {
+  // store status for waiting UI
+  lastRoomStatus = st;
+  updateNextRoundUI();
   // host view
   if (st?.roomCode && st.roomCode === currentRoom){
     hostPhase = st.phase || "—";
@@ -1556,13 +1726,25 @@ socket.on("room-status", (st) => {
       $("host-start-vote").classList.toggle("hidden", !canShow);
       // enable if at least 1 meme exists (early start) OR all ready event already fired (memesRevealed true)
       $("host-start-vote").disabled = !(hostMemesCount > 0);
-      if (st.phase === "collect" && st.memesRevealed) $("host-start-vote").disabled = false;
+      if (st.phase === "collect" && (st.memesCount || 0) > 0) $("host-start-vote").disabled = false;
+    }
+
+    // Voting finished signal (host)
+    if ($("host-vote-finished")){
+      if (st.phase === "vote" && st.voteComplete) $("host-vote-finished").classList.remove("hidden");
+      else $("host-vote-finished").classList.add("hidden");
     }
   }
 
   // player view task
   if (playerState.joined && st?.roomCode === playerState.roomCode){
     if (st.task) $("player-task").textContent = st.task;
+
+    // Voting finished signal (player)
+    if ($("player-vote-finished")){
+      if (st.phase === "vote" && st.voteComplete) $("player-vote-finished").classList.remove("hidden");
+      else $("player-vote-finished").classList.add("hidden");
+    }
   }
 
   // Legacy: keep TT transforms neutral
@@ -1570,21 +1752,43 @@ socket.on("room-status", (st) => {
 });
 
 socket.on("round-task", (p) => {
+  // reset waiting UI for next round
+  nextUiDelayDone = false;
+  nextUiRoundNumber = 0;
+  hostAutoNextLock = false;
+  $("player-next-wrap")?.classList.add("hidden");
+  $("host-ready-next")?.classList.add("hidden");
+
+  // Player: reset inputs + clear previous voting grid (so old memes don't stick)
   if (playerState.joined && p?.roomCode === playerState.roomCode){
     $("player-task").textContent = p.task || "—";
     $("player-sent").classList.add("hidden");
     $("player-voted").classList.add("hidden");
+    $("player-vote-finished")?.classList.add("hidden");
+
+    const vb = $("player-vote");
+    if (vb) vb.innerHTML = "";
+
     $("player-meme-url").value = "";
     $("player-meme-caption").value = "";
     $("player-meme-file").value = "";
   }
+
+  // Host: UI hints
   if (p?.roomCode === currentRoom){
     $("host-phase").textContent = "Фаза: collect";
+    $("host-vote-finished")?.classList.add("hidden");
     if ($("host-start-vote")) { $("host-start-vote").classList.remove("hidden"); $("host-start-vote").disabled = true; }
   }
 });
 
+
+
 socket.on("voting-started", ({ roomCode, memes }) => {
+  // hide next-round UI until voting is finished
+  nextUiDelayDone = false;
+  $("player-next-wrap")?.classList.add("hidden");
+  $("host-ready-next")?.classList.add("hidden");
   if (playerState.joined && roomCode === playerState.roomCode){
     const box = $("player-vote");
     box.innerHTML = "";
@@ -1613,6 +1817,60 @@ socket.on("voting-started", ({ roomCode, memes }) => {
     try{ applyPlayerCardVars(loadLocalPlayerCard()||DEFAULT_PLAYER_CARD, "voting-started"); }catch(e){}
     try{ applyTTVars("voting-started"); }catch(e){}
   }
+});
+
+socket.on("voting-finished", (payload = {}) => {
+  const roomCode = String(payload.roomCode || "").trim().toUpperCase();
+  const roundNumber = Number(payload.roundNumber || 0);
+  const myRoom = currentRoom || playerState.roomCode;
+  if (!roomCode || roomCode !== myRoom) return;
+
+  pushDebug("voting-finished", {
+    roomCode,
+    roundNumber,
+    winners: Array.isArray(payload.winners) ? payload.winners.length : (payload.winner ? 1 : 0),
+    displayMs: Number(payload.displayMs || 3000),
+  });
+
+  $("host-vote-finished")?.classList.remove("hidden");
+  $("player-vote-finished")?.classList.remove("hidden");
+
+  // disable remaining vote buttons (if any)
+  try { $("player-vote")?.querySelectorAll("button")?.forEach(b => b.disabled = true); } catch(e){}
+
+  nextUiDelayDone = false;
+  nextUiRoundNumber = roundNumber || 0;
+  hostAutoNextLock = false;
+
+  showWinnerOverlay(payload).then(() => {
+    // After winner overlay: enable "next" UI (keep existing ready system)…
+    nextUiDelayDone = true;
+    updateNextRoundUI();
+
+    // …and auto-start next round (host only)
+    const isHost = (!screens.host.classList.contains("hidden")) && (currentRoom === roomCode);
+    if (!isHost) return;
+    if (hostAutoNextLock) return;
+    hostAutoNextLock = true;
+    setTimeout(() => {
+      $("host-next-round")?.click();
+    }, 80);
+  });
+});
+socket.on("all-ready-next", ({ roomCode, roundNumber, ready, total }) => {
+  const myRoom = currentRoom || playerState.roomCode;
+  if (!roomCode || roomCode !== myRoom) return;
+  pushDebug("all-ready-next", { roomCode, roundNumber, ready, total });
+
+  const isHost = !screens.host.classList.contains("hidden");
+  if (!isHost) return;
+  if (hostAutoNextLock) return;
+  if (!lastRoomStatus || lastRoomStatus.phase !== "vote" || !lastRoomStatus.voteComplete) return;
+
+  hostAutoNextLock = true;
+  setTimeout(() => {
+    $("host-next-round")?.click();
+  }, 50);
 });
 
 socket.on("game-finished", ({ roomCode, results }) => {
@@ -1981,6 +2239,7 @@ function adminHumanError(code){
     "E_ROOM_LOCKED": { title:"Комната закрыта для новых игроков", explain:"Игра уже стартовала. Новые игроки не могут зайти с новым ником." },
     "E_WRONG_PHASE": { title:"Неподходящая фаза", explain:"Действие не подходит к текущей фазе (lobby/collect/vote/finished)." },
     "E_VOTE_NOT_STARTED": { title:"Голосование не началось", explain:"Сначала ведущий должен запустить голосование." },
+    "E_VOTE_CLOSED": { title:"Голосование завершено", explain:"Все участники уже проголосовали, голосование закрыто. Можно переходить к следующему раунду." },
     "E_ALREADY_VOTED": { title:"Повторный голос", explain:"Игрок уже голосовал. По правилам это запрещено." },
     "E_VOTE_OWN_MEME": { title:"Голос за свой мем", explain:"Нельзя голосовать за свой мем (проверка анти-чит)." },
     "E_MEME_NOT_FOUND": { title:"Мем не найден", explain:"ID мема не существует или список мемов изменился." },
@@ -2559,11 +2818,15 @@ async function atPlayRound(roundNumber, taskText, totalScores){
   const snapAfterMemes = await atSnapshotRoom();
   atPush("ok", "send_memes", `Мемы отправлены: ${adminAT.botMeta.length}`, snapAfterMemes);
 
-  // Start voting
+  // Start voting (может запуститься автоматически, когда все отправили мемы)
   atPush("info", "start_vote", "Запускаю vote…");
-  const rv = await atEmitCb(adminAT.hostSock, "host-start-vote", { roomCode }, 8000);
-  if(!rv?.ok) throw new Error("E_START_VOTE:" + (rv?.error || ""));
-  await atDelay(300);
+  if(String(snapAfterMemes?.phase) === "vote"){
+    atPush("ok", "start_vote", "Vote уже запущен автоматически", snapAfterMemes);
+  } else {
+    const rv = await atEmitCb(adminAT.hostSock, "host-start-vote", { roomCode }, 8000);
+    if(!rv?.ok && rv?.errorCode !== "E_WRONG_PHASE") throw new Error("E_START_VOTE:" + (rv?.error || ""));
+    await atDelay(300);
+  }
 
   // Get memes list
   const roomSnapVote = await atSnapshotRoom();

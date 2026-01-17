@@ -142,6 +142,8 @@
           <h3>Мемы раунда</h3>
           <div id="host-memes" class="memes"></div>
           <div class="muted" id="host-phase">Фаза: —</div>
+          <div id="host-vote-finished" class="sent hidden">✅ Голосование завершено</div>
+          <div id="host-ready-next" class="muted hidden">Готовы к следующему раунду: 0/0</div>
         </div>
 
         <div class="panel">
@@ -196,6 +198,11 @@
           <h3>Голосование</h3>
           <div id="player-vote" class="memes"></div>
           <div id="player-voted" class="sent hidden">✅ Голос учтён</div>
+          <div id="player-vote-finished" class="sent hidden">✅ Голосование завершено</div>
+          <div id="player-next-wrap" class="sent hidden">
+            <button id="player-next-round" class="primary">Следующий раунд</button>
+            <div id="player-next-wait" class="muted"></div>
+          </div>
         </div>
 
         <div class="panel">
@@ -520,5 +527,12 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="./script.js"></script>
+  <div id="winner-overlay" class="overlay hidden" aria-hidden="true">
+    <div class="overlay-card">
+      <div id="winner-title" class="overlay-title">Победитель раунда</div>
+      <div id="winner-media" class="overlay-media"></div>
+      <div id="winner-caption" class="overlay-caption"></div>
+    </div>
+  </div>
 </body>
 </html>
