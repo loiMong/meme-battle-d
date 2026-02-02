@@ -7,16 +7,13 @@ const CALIBRATION_TIKTOK_URL = "https://www.tiktok.com/@prokendol112/video/75088
 
 // === AI tasks presets ===
 const AI_PRESET_THEMES = [
-  "Аниме", "Фильмы", "Сериалы", "Видеоигры", "Комиксы/супергерои",
-  "Работа/офис", "Учёба/универ", "Отношения", "Свидания", "Друзья",
-  "Семья", "Питомцы", "Еда", "Кофе/энергетики", "Спорт/зал",
-  "ЗОЖ/диеты", "Сон", "Утро/понедельник", "Праздники", "Путешествия",
-  "Транспорт", "Быт/дом", "Шопинг", "Деньги", "Технологии",
-  "Телефоны/гаджеты", "Интернет/соцсети", "Геймерская боль", "Неловкие ситуации", "Фейлы",
-  "Успех/мотивация", "Прокрастинация", "Баги/глюки", "Кринж", "Сарказм",
-  "Абсурд", "Чёрный юмор", "Хоррор", "Фантастика", "Мистика",
-  "История/школа", "Музыка", "Концерты/тусовки", "Мода/стиль", "Погода",
-  "Кулинария", "Ностальгия", "Жизнь в Чехии", "Я и мои планы", "Внутренний диалог"
+  "Anime", "Movies", "Games", "Office", "Pets", "Food",
+  "Sports", "Music", "Travel", "Technology", "Art", "History",
+  "Science", "Nature", "Fashion", "Cooking", "Fitness", "Books",
+  "Comedy", "Horror", "Romance", "Mystery", "Fantasy", "SciFi",
+  "Superheroes", "Zombies", "Pirates", "Ninjas", "Robots", "Aliens",
+  "Medieval", "Western", "Cyberpunk", "Steampunk", "Space", "Ocean",
+  "Dinosaurs", "Magic", "School", "Work", "Family", "Friends"
 ];
 
 let aiState = {
@@ -154,6 +151,15 @@ function renderMediaHTML(url){
     return `
       <div class="mediaFrame">
         <video src="${String(url)}" controls playsinline></video>
+      </div>
+    `;
+  }
+
+  // AUDIO: keep simple
+  if(info.type === "audio_data" || info.type === "audio_url"){
+    return `
+      <div class="mediaFrame">
+        <audio src="${String(url)}" controls></audio>
       </div>
     `;
   }
@@ -674,6 +680,562 @@ const screens = ["mode","host","player","admin"].reduce((acc,k)=>{
   acc[k] = $(`screen-${k}`);
   return acc;
 }, {});
+function setHostView(view){
+  const setup = $("host-view-setup");
+  const round = $("host-view-round");
+  const voting = $("host-view-voting");
+  const game = $("host-view-game");
+  if(!setup || !game) return;
+  const v = view || "setup";
+
+  // clean up view-specific timers/loops
+  const prev = hostView;
+  if(prev && prev !== v){
+    if(prev === "round") hostRoundStopTimer();
+    if(prev === "voting") try{ hostVoteStop(); }catch(e){}
+  }
+
+  setup.classList.toggle("hidden", v !== "setup");
+  if(round) round.classList.toggle("hidden", v !== "round");
+  if(voting) voting.classList.toggle("hidden", v !== "voting");
+  game.classList.toggle("hidden", v !== "game");
+  hostView = v;
+  if(v === "round"){ try{ scheduleFitHostRoundLayout(); }catch(e){} }
+}
+
+let hostView = "setup";
+let hostRoundState = {
+  secondsTotal: 60,
+  secondsLeft: 60,
+  interval: null,
+  forcedVote: false,
+  task: "",
+  round: 1,
+  totalRounds: 1,
+};
+
+function fmtMMSS(sec){
+  const s = Math.max(0, Number(sec)||0);
+  const mm = String(Math.floor(s/60)).padStart(2,'0');
+  const ss = String(Math.floor(s%60)).padStart(2,'0');
+  return `${mm}:${ss}`;
+}
+
+
+// --- Host Round: auto-fit task text (<= 6 lines) + ensure no scroll ---
+var hostRoundFitRaf = 0;
+
+function scheduleFitHostRoundLayout(){
+  try{
+    if(hostRoundFitRaf) cancelAnimationFrame(hostRoundFitRaf);
+    hostRoundFitRaf = requestAnimationFrame(()=>{
+      hostRoundFitRaf = 0;
+      try{ fitHostRoundLayout(); }catch(e){}
+    });
+  }catch(e){}
+}
+
+function __hostRoundCountLines(el){
+  if(!el) return 999;
+  const cs = getComputedStyle(el);
+  const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize)||16) * 1.05;
+  const h = el.scrollHeight || 0;
+  return lh ? Math.max(1, Math.round(h / lh)) : 999;
+}
+
+function __hostRoundHasScroll(){
+  const sc = document.scrollingElement || document.documentElement;
+  if(!sc) return false;
+  return (Math.ceil(sc.scrollHeight) - Math.ceil(window.innerHeight)) > 2;
+}
+
+function fitHostRoundLayout(){
+  const box = $("host-view-round");
+  if(!box || box.classList.contains("hidden")) return;
+  const theme = $("host-round-theme");
+  if(!theme) return;
+
+  // Reset
+  box.classList.remove("hr-compact","hr-ultra","hr-overlong");
+  theme.style.removeProperty("--hostThemeFont");
+
+  const textLen = (theme.textContent || "").trim().length;
+  if(textLen > 130) box.classList.add("hr-overlong");
+
+  const MAX_LINES = 6;
+
+  function tryMode(mode){
+    box.classList.toggle("hr-compact", mode >= 1);
+    box.classList.toggle("hr-ultra", mode >= 2);
+
+    // reset font var so we can read the baseline size for this mode
+    theme.style.removeProperty("--hostThemeFont");
+    // force reflow
+    void theme.offsetWidth;
+
+    const basePx = parseFloat(getComputedStyle(theme).fontSize) || 40;
+    const minPx = Math.max(14, Math.min(22, basePx * 0.55));
+    const maxPx = Math.max(minPx, basePx);
+
+    // If it already fits at max, keep it.
+    theme.style.setProperty("--hostThemeFont", `${maxPx}px`);
+    void theme.offsetWidth;
+    let lines = __hostRoundCountLines(theme);
+    if(lines <= MAX_LINES && !__hostRoundHasScroll()){
+      return true;
+    }
+
+    // Binary search best size that fits
+    let lo = minPx, hi = maxPx, best = minPx;
+    for(let i=0;i<14;i++){
+      const mid = (lo + hi) / 2;
+      theme.style.setProperty("--hostThemeFont", `${mid}px`);
+      void theme.offsetWidth;
+      lines = __hostRoundCountLines(theme);
+      const ok = (lines <= MAX_LINES) && !__hostRoundHasScroll();
+      if(ok){
+        best = mid;
+        lo = mid;
+      }else{
+        hi = mid;
+      }
+    }
+    theme.style.setProperty("--hostThemeFont", `${best}px`);
+    void theme.offsetWidth;
+
+    lines = __hostRoundCountLines(theme);
+    return (lines <= MAX_LINES) && !__hostRoundHasScroll();
+  }
+
+  // Try normal -> compact -> ultra
+  if(tryMode(0)) return;
+  if(tryMode(1)) return;
+  tryMode(2);
+}
+// --- END Host Round auto-fit ---
+
+function hostRoundSetTimerVisual(sec){
+  const el = $("host-round-timer");
+  if(!el) return;
+  const s = Number(sec)||0;
+  el.textContent = fmtMMSS(s);
+  el.classList.remove('ok','warn','crit','bounce');
+  if(s <= 5) el.classList.add('crit');
+  else if(s <= 10) el.classList.add('warn');
+  else el.classList.add('ok');
+  if(s <= 10 && s > 0){
+    // retrigger bounce each tick
+    void el.offsetWidth;
+    el.classList.add('bounce');
+  }
+}
+
+function hostRoundStopTimer(){
+  if(hostRoundState.interval){
+    clearInterval(hostRoundState.interval);
+    hostRoundState.interval = null;
+  }
+}
+
+function hostRoundStartTimer(seconds){
+  hostRoundStopTimer();
+  hostRoundState.secondsTotal = Math.max(5, Number(seconds)||60);
+  hostRoundState.secondsLeft = hostRoundState.secondsTotal;
+  hostRoundState.forcedVote = false;
+  hostRoundSetTimerVisual(hostRoundState.secondsLeft);
+  hostRoundState.interval = setInterval(()=>{
+    hostRoundState.secondsLeft = Math.max(0, (hostRoundState.secondsLeft||0) - 1);
+    hostRoundSetTimerVisual(hostRoundState.secondsLeft);
+    if(hostRoundState.secondsLeft <= 0){
+      hostRoundStopTimer();
+      // force voting if still collecting
+      try{
+        const st = lastRoomStatus;
+        if(!hostRoundState.forcedVote && currentRoom && st && st.phase === 'collect'){
+          hostRoundState.forcedVote = true;
+          socket.emit('host-start-vote', { roomCode: currentRoom }, ()=>{});
+        }
+      }catch(e){}
+    }
+  }, 1000);
+}
+
+function hostRoundSetTask(task, roundNum, totalRounds){
+  hostRoundState.task = String(task || hostRoundState.task || '').trim();
+  hostRoundState.round = Number(roundNum || hostRoundState.round || 1);
+  hostRoundState.totalRounds = Number(totalRounds || hostRoundState.totalRounds || 1);
+  const ind = $("host-round-indicator");
+  if(ind) ind.textContent = `ROUND ${hostRoundState.round} / ${hostRoundState.totalRounds}`;
+  const theme = $("host-round-theme");
+  if(theme) theme.textContent = hostRoundState.task || '—';
+  try{ scheduleFitHostRoundLayout(); }catch(e){}
+}
+
+function hostRoundUpdateProgress(st){
+  const box = $("host-view-round");
+  if(!box || box.classList.contains('hidden')) return;
+  if(!st) return;
+  const players = Array.isArray(st.players) ? st.players : [];
+  const connected = players.filter(p => p && p.connected);
+  const total = connected.length;
+  const sent = connected.filter(p => p.hasMeme).length;
+  const missing = Math.max(0, total - sent);
+
+  $("host-round-sent") && ($("host-round-sent").textContent = String(sent));
+  $("host-round-missing") && ($("host-round-missing").textContent = String(missing));
+  $("host-round-total") && ($("host-round-total").textContent = `${sent}/${total} total`);
+  const bar = $("host-round-bar");
+  if(bar){
+    const pct = total ? Math.round((sent/total)*100) : 0;
+    bar.style.width = `${pct}%`;
+  }
+  const wait = $("host-round-wait");
+  if(wait){
+    wait.classList.toggle('hidden', !(st.phase === 'collect' && sent < total));
+  }
+}
+
+// -------- HOST voting view (fixed timer + masonry + auto-scroll)
+const HOST_VOTE_SECONDS_DEFAULT = 30;
+let hostVoteState = {
+  secondsTotal: HOST_VOTE_SECONDS_DEFAULT,
+  voteStartAt: 0,
+  voteEndsAt: 0,
+  lastShown: null,
+  interval: null,
+  progressCirc: null,
+  lastRenderKey: "",
+  auto: {
+    enabled: false,
+    direction: "down",
+    interval: null,
+    pauseTimeout: null,
+    resumeTimeout: null,
+    lastProgAt: 0,
+    scrollingEl: null,
+    onScroll: null,
+  }
+};
+
+function hostVoteSetTimerVisual(timeLeft){
+  const el = $("host-vote-timer");
+  if(!el) return;
+
+  const left = Math.max(0, Math.floor(Number(timeLeft)||0));
+
+  // state class: ok / warn / crit (like Host Round timer)
+  el.classList.remove("ok","warn","crit");
+  if(left <= 5) el.classList.add("crit");
+  else if(left <= 10) el.classList.add("warn");
+  else el.classList.add("ok");
+
+  // update only when second changes
+  if(hostVoteState.lastShown !== left){
+    hostVoteState.lastShown = left;
+    el.textContent = fmtMMSS(left);
+
+    // bounce near the end (like Task screen)
+    el.classList.remove("bounce");
+    void el.offsetWidth;
+    if(left > 0 && left <= 10) el.classList.add("bounce");
+  }
+}
+
+function hostVoteStopTimer(){
+  if(hostVoteState.interval){
+    clearInterval(hostVoteState.interval);
+    hostVoteState.interval = null;
+  }
+}
+
+function hostVoteStartTimer(secondsTotal){
+  hostVoteStopTimer();
+  hostVoteState.secondsTotal = Math.max(5, Number(secondsTotal)||HOST_VOTE_SECONDS_DEFAULT);
+  hostVoteState.lastShown = null;
+
+  const tick = ()=>{
+    const endsAt = Number(hostVoteState.voteEndsAt || 0);
+    let left = 0;
+
+    if (Number.isFinite(endsAt) && endsAt > 0) {
+      left = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+    } else {
+      if(!hostVoteState.voteStartAt) hostVoteState.voteStartAt = Date.now();
+      const elapsed = Math.floor((Date.now() - (hostVoteState.voteStartAt||Date.now())) / 1000);
+      left = Math.max(0, hostVoteState.secondsTotal - elapsed);
+    }
+
+
+    // Detect classic bug: UI shows 00:00 but server doesn't finish vote (missing endsAt/timer)
+    try{
+      const inVoting = (typeof hostView !== "undefined" && hostView === "voting");
+      const st = (typeof lastRoomStatus !== "undefined") ? lastRoomStatus : null;
+
+      if(inVoting && left === 0){
+        const nowMs = Date.now();
+        const key = String(hostVoteState.voteEndsAt || 0) + "|" + String(hostVoteState.voteStartAt || 0);
+
+        if(hostVoteState._zeroKey !== key){
+          hostVoteState._zeroKey = key;
+          hostVoteState._zeroSince = nowMs;
+          hostVoteState._zeroReported = false;
+        }
+        if(!hostVoteState._zeroSince) hostVoteState._zeroSince = nowMs;
+
+        if(!hostVoteState._zeroReported && (nowMs - (hostVoteState._zeroSince||nowMs)) > 1500){
+          hostVoteState._zeroReported = true;
+          const detail = {
+            left,
+            clientNow: nowMs,
+            voteEndsAt: hostVoteState.voteEndsAt || 0,
+            secondsTotal: hostVoteState.secondsTotal || 0,
+            roomStatus: {
+              phase: st?.phase || null,
+              voteComplete: !!st?.voteComplete,
+              serverNow: st?.serverNow || null,
+              voteEndsAt: st?.voteEndsAt || 0,
+              voteSeconds: st?.voteSeconds || null,
+              debugTimers: st?.debugTimers || null,
+            }
+          };
+          pushDebug("vote_timer_zero_stuck", detail);
+          dbgReport("vote_timer_zero_stuck", detail);
+          if(!hostVoteState._forceFinishSent){
+            hostVoteState._forceFinishSent = true;
+            try{
+              if(typeof socket !== "undefined" && socket && currentRoom){
+                // Server already supports this event; use it as a failsafe when the vote timer data is missing/stuck.
+                socket.emit("host-force-finish-vote", { roomCode: currentRoom, reason: "timer_stuck" }, (res)=>{
+                  try{ pushDebug("host-force-finish-vote", res || {}); }catch(e){}
+                });
+              }
+            }catch(e){}
+          }
+
+        }
+      } else {
+        hostVoteState._zeroSince = 0;
+        hostVoteState._zeroReported = false;
+      }
+    }catch(e){}
+
+    hostVoteSetTimerVisual(left);
+  };
+
+  tick();
+  hostVoteState.interval = setInterval(tick, 250);
+}
+
+function hostVoteStopAutoScroll(){
+  const a = hostVoteState.auto;
+  a.enabled = false;
+  if(a.interval){ clearInterval(a.interval); a.interval = null; }
+  if(a.pauseTimeout){ clearTimeout(a.pauseTimeout); a.pauseTimeout = null; }
+  if(a.resumeTimeout){ clearTimeout(a.resumeTimeout); a.resumeTimeout = null; }
+  if(a.scrollingEl && a.onScroll){
+    a.scrollingEl.removeEventListener('scroll', a.onScroll);
+  }
+  a.scrollingEl = null;
+  a.onScroll = null;
+}
+
+function hostVoteStartAutoScroll(){
+  hostVoteStopAutoScroll();
+  const el = $("host-vote-scroll");
+  if(!el) return;
+  // only if overflow
+  if(el.scrollHeight <= el.clientHeight + 4) return;
+
+  const a = hostVoteState.auto;
+  a.enabled = true;
+  a.direction = "down";
+  a.scrollingEl = el;
+
+  const speedPx = 0.5;
+  const intervalMs = 30;
+  const pauseMs = 2000;
+  const edgePad = 5;
+
+  const startInterval = ()=>{
+    if(!a.enabled || !a.scrollingEl) return;
+    if(a.interval) clearInterval(a.interval);
+    a.interval = setInterval(()=>{
+      if(!a.enabled || !a.scrollingEl) return;
+      const node = a.scrollingEl;
+      a.lastProgAt = Date.now();
+      if(a.direction === "down") node.scrollTop += speedPx;
+      else node.scrollTop -= speedPx;
+
+      const atBottom = (node.scrollTop + node.clientHeight) >= (node.scrollHeight - edgePad);
+      const atTop = node.scrollTop <= edgePad;
+      if(a.direction === "down" && atBottom){
+        clearInterval(a.interval); a.interval = null;
+        a.pauseTimeout = setTimeout(()=>{ a.direction = "up"; startInterval(); }, pauseMs);
+      }
+      if(a.direction === "up" && atTop){
+        clearInterval(a.interval); a.interval = null;
+        a.pauseTimeout = setTimeout(()=>{ a.direction = "down"; startInterval(); }, pauseMs);
+      }
+    }, intervalMs);
+  };
+
+  // Manual scroll detection (ignore programmatic ticks)
+  let manualDebounce = null;
+  a.onScroll = ()=>{
+    if(!a.enabled) return;
+    if(Date.now() - (a.lastProgAt||0) < 80) return; // programmatic tick
+    if(manualDebounce) clearTimeout(manualDebounce);
+    manualDebounce = setTimeout(()=>{
+      if(!a.enabled) return;
+      // pause auto-scroll
+      if(a.interval){ clearInterval(a.interval); a.interval = null; }
+      if(a.pauseTimeout){ clearTimeout(a.pauseTimeout); a.pauseTimeout = null; }
+      if(a.resumeTimeout) clearTimeout(a.resumeTimeout);
+      a.resumeTimeout = setTimeout(()=>{
+        startInterval();
+      }, 3000);
+    }, 100);
+  };
+
+  el.addEventListener('scroll', a.onScroll, { passive: true });
+  startInterval();
+}
+
+function hostVoteRender(st){
+  const box = $("host-view-voting");
+  if(!box) return;
+
+  const task = (st && st.task) ? String(st.task) : (hostRoundState.task || "—");
+  const themeEl = $("host-vote-theme");
+  if(themeEl) themeEl.textContent = task || "—";
+
+  const statusEl = $("host-vote-status");
+  if(statusEl){
+    const memes = Array.isArray(st?.memes) ? st.memes : [];
+    if(st?.voteComplete) statusEl.textContent = "Voting finished.";
+    else if(!memes.length) statusEl.textContent = "Waiting for memes…";
+    else statusEl.textContent = "Voting in progress…";
+  }
+
+  const memes = Array.isArray(st?.memes) ? st.memes : [];
+  const key = memes.map(m => `${m?.id||''}:${m?.url||''}`).join('|');
+  if(key && hostVoteState.lastRenderKey === key) return;
+  hostVoteState.lastRenderKey = key;
+
+  const grid = $("host-vote-grid");
+  if(!grid) return;
+  grid.innerHTML = "";
+
+  memes.forEach((m, idx) => {
+    const item = document.createElement('div');
+    item.className = 'hostVoteItem';
+    item.style.animationDelay = `${idx * 0.1}s`;
+
+    const badge = document.createElement('div');
+    badge.className = 'hostVoteBadge';
+    const b = document.createElement('span');
+    b.textContent = String(idx + 1);
+    badge.appendChild(b);
+
+    const card = document.createElement('div');
+    card.className = 'hostVoteCard';
+
+    // Media
+    const url = String(m?.url || "").trim();
+    const mt = detectMediaType(url);
+    if(mt?.type && (mt.type.startsWith('image') || mt.type.startsWith('gif'))){
+      const media = document.createElement('div');
+      media.className = 'hostVoteMedia';
+
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.alt = m?.caption ? String(m.caption) : 'Meme';
+      img.src = url;
+      img.addEventListener('load', () => {
+        try{
+          if(img.naturalWidth && img.naturalHeight){
+            media.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
+          }
+        }catch(e){}
+      }, { once: true });
+
+      media.appendChild(img);
+      card.appendChild(media);
+    }else{
+      // fallback to existing embed renderer
+      const wrap = document.createElement('div');
+      wrap.innerHTML = renderMediaHTML(url);
+      const node = wrap.firstElementChild;
+      if(node) card.appendChild(node);
+    }
+
+    // Caption area (optional)
+    const cap = String(m?.caption || '').trim();
+    if(cap){
+      const capWrap = document.createElement('div');
+      capWrap.className = 'hostVoteCapWrap';
+      const capEl = document.createElement('div');
+      capEl.className = 'hostVoteCap';
+      capEl.textContent = cap;
+      capWrap.appendChild(capEl);
+      card.appendChild(capWrap);
+    }
+
+    item.appendChild(badge);
+    item.appendChild(card);
+    grid.appendChild(item);
+  });
+
+  // Apply TikTok vars after rendering
+  setTimeout(() => {
+    try{ applyTTVars('host-voting:render'); }catch(e){}
+  }, 0);
+
+  // auto-scroll only when needed
+  setTimeout(() => {
+    try{ hostVoteStartAutoScroll(); }catch(e){}
+  }, 200);
+}
+
+function hostVoteEnter(st){
+  hostVoteState._forceFinishSent = false;
+  // when entering voting: prefer server-authoritative deadline (prevents 00:00 hang due to desync)
+  try{
+    const ve = Number(st?.voteEndsAt || 0);
+    if(Number.isFinite(ve) && ve > 0){
+      hostVoteState.voteEndsAt = ve;
+      hostVoteState.voteStartAt = 0;
+    } else {
+      // fallback (should be rare)
+      hostVoteState.voteStartAt = Date.now();
+      hostVoteState.voteEndsAt = 0;
+    }
+    const vs = Number(st?.voteSeconds || 0);
+    if(Number.isFinite(vs) && vs > 0) hostVoteState.secondsTotal = Math.max(5, vs);
+  }catch(e){
+    hostVoteState.voteStartAt = Date.now();
+    hostVoteState.voteEndsAt = 0;
+  }
+
+  hostVoteState.lastShown = null;
+  hostVoteState.lastRenderKey = "";
+  hostVoteRender(st);
+  hostVoteStartTimer(hostVoteState.secondsTotal || HOST_VOTE_SECONDS_DEFAULT);
+}
+
+
+function hostVoteStop(){
+  hostVoteStopTimer();
+  hostVoteStopAutoScroll();
+  hostVoteState.voteStartAt = 0;
+  hostVoteState.voteEndsAt = 0;
+
+  hostVoteState._zeroSince = 0;
+  hostVoteState._zeroReported = false;
+  hostVoteState._zeroKey = "";
+}
+
+
 function showScreen(name){
   Object.entries(screens).forEach(([k,el])=>{
     if(!el) return;
@@ -683,6 +1245,7 @@ function showScreen(name){
   const sb = $("settings-toggle");
   if(sb) sb.classList.toggle("hidden", name === "mode");
   if(name === "mode") { try{ setSettings(false); }catch(e){} }
+  if(name === "host") { try{ setHostView("setup"); }catch(e){} }
   pushDebug("screen", name);
 }
 $("btn-mode-host")?.addEventListener("click", () => showScreen("host"));
@@ -693,6 +1256,31 @@ $("btn-mode-admin")?.addEventListener("click", () => showScreen("admin"));
 const socket = (typeof io === "function")
   ? io(SERVER_URL, { transports: ["websocket","polling"] })
   : { on:()=>{}, emit:()=>{} };
+
+function dbgReport(tag, detail){
+  try{
+    const roomCode = (typeof currentRoom !== "undefined" && currentRoom) ? currentRoom
+      : ((typeof playerState !== "undefined" && playerState && playerState.roomCode) ? playerState.roomCode : null);
+    socket.emit("debug-report", {
+      tag: String(tag || ""),
+      detail: detail ?? null,
+      roomCode: roomCode,
+      clientNow: Date.now(),
+      hostView: (typeof hostView !== "undefined") ? hostView : null,
+      hostPhase: (typeof hostPhase !== "undefined") ? hostPhase : null,
+      playerJoined: (typeof playerState !== "undefined" && playerState) ? !!playerState.joined : null,
+    });
+  }catch(e){}
+}
+
+// Server timer diagnostics (schedule/fire/clear/watchdog)
+socket.on("timer-debug", (p) => {
+  try{
+    const action = p?.action ? String(p.action) : "timer";
+    pushDebug(`timer:${action}`, p);
+  }catch(e){}
+});
+
 
 if (typeof io !== "function"){
   pushDebug("socket.io missing", "Не загрузился /socket.io/socket.io.js");
@@ -710,6 +1298,7 @@ function setPill(id, ok){
 socket.on("connect", () => {
   pushDebug("socket", { event:"connect", id: socket.id });
   setPill("host-conn", true);
+  setPill("host-conn2", true);
   setPill("player-conn", true);
   setPill("admin-conn", true);
 
@@ -723,6 +1312,7 @@ socket.on("connect", () => {
 socket.on("disconnect", (r) => {
   pushDebug("socket", { event:"disconnect", reason: r });
   setPill("host-conn", false);
+  setPill("host-conn2", false);
   setPill("player-conn", false);
   setPill("admin-conn", false);
 });
@@ -782,9 +1372,15 @@ function showWinnerOverlay(payloadOrWinner = {}) {
   // Accept both formats:
   // 1) payload: { winners, winner, maxVotes, displayMs, tie }
   // 2) direct winner object: { url, caption, nickname, votes }
-  const payload = (payloadOrWinner && (payloadOrWinner.winners || payloadOrWinner.winner || payloadOrWinner.maxVotes !== undefined || payloadOrWinner.displayMs !== undefined))
-    ? payloadOrWinner
-    : { winner: payloadOrWinner };
+  const looksLikePayload = payloadOrWinner && typeof payloadOrWinner === "object" && (
+    Array.isArray(payloadOrWinner.winners) ||
+    payloadOrWinner.winner ||
+    payloadOrWinner.maxVotes !== undefined ||
+    payloadOrWinner.displayMs !== undefined ||
+    payloadOrWinner.tie !== undefined
+  );
+
+  const payload = looksLikePayload ? payloadOrWinner : { winner: payloadOrWinner };
 
   let winners = Array.isArray(payload.winners)
     ? payload.winners
@@ -796,24 +1392,35 @@ function showWinnerOverlay(payloadOrWinner = {}) {
   const fallbackMemes = []
     .concat(Array.isArray(lastRoomStatus?.memes) ? lastRoomStatus.memes : [])
     .concat(Array.isArray(hostLatestMemes) ? hostLatestMemes : []);
+
   const byId = new Map();
   for (const m of fallbackMemes) {
     const id = m && (m.id || m.memeId);
     if (id) byId.set(String(id), m);
   }
 
-  // If server didn't send winners but sent maxVotes, derive from fallback
-  if (winners.length === 0 && Number.isFinite(Number(payload.maxVotes)) && byId.size > 0) {
-    const mv = Number(payload.maxVotes);
-    winners = Array.from(byId.values())
-      .filter(m => Number(m?.votes || 0) === mv)
-      .map(m => ({ id: m.id || m.memeId, url: m.url || m.memeUrl, caption: m.caption || "", nickname: m.nickname || "", votes: Number(m.votes || 0) }));
+  // Derive winners from fallback votes (handles ties even if server only sent single winner)
+  if (byId.size > 0 && String(payload?.reason || "") !== "no_votes") {
+    let maxVotes = -Infinity;
+    for (const m of byId.values()) {
+      const v = Number(m?.votes ?? 0);
+      if (Number.isFinite(v) && v > maxVotes) maxVotes = v;
+    }
+    if (Number.isFinite(maxVotes) && maxVotes >= 0) {
+      const derived = Array.from(byId.values())
+        .filter(m => Number(m?.votes ?? 0) === maxVotes)
+        .map(m => ({ id: m.id || m.memeId, url: m.url || m.memeUrl, caption: m.caption || "", nickname: m.nickname || "", votes: Number(m.votes || 0) }));
+
+      if (winners.length === 0) winners = derived;
+      else if (winners.length === 1 && derived.length > 1) winners = derived;
+    }
   }
 
   const norm = (w) => {
     if (!w) return null;
     const id = w.id ?? w.memeId ?? null;
     const src = id ? byId.get(String(id)) : null;
+
     const url =
       w.url || w.memeUrl || w.src || w.dataUrl ||
       (src ? (src.url || src.memeUrl || src.src || src.dataUrl) : null);
@@ -827,59 +1434,148 @@ function showWinnerOverlay(payloadOrWinner = {}) {
   };
 
   const list = winners.map(norm).filter(Boolean);
+  const isTie = list.length > 1;
 
-  // Title
-  const titleEl = $("winner-title") || ov.querySelector(".overlay-title");
-  if (titleEl) {
-    const isTie = list.length > 1;
-    titleEl.textContent = isTie ? "Ничья — победители" : "Победитель раунда";
-  }
+  // Apply mode + sizing
+  ov.classList.toggle("ws-tie", isTie);
+  ov.classList.toggle("ws-win", !isTie);
+  ov.style.setProperty("--wsMaxH", isTie ? "25vh" : "30vh");
 
-  // Media render
-  const mediaBox = $("winner-media");
-  if (mediaBox) {
-    mediaBox.innerHTML = "";
-    if (list.length === 0) {
-      mediaBox.innerHTML = `<div class="muted">Нет данных</div>`;
-    } else if (list.length === 1) {
-      const w = list[0];
-      mediaBox.innerHTML = w.url ? renderMediaHTML(w.url) : `<div class="muted">Нет медиа</div>`;
+  // Title + emoji
+  const titleEl = $("winner-title");
+  const reasonStr = String(payload?.reason || "");
+  if (titleEl){
+    if(list.length === 0){
+      if(reasonStr === "no_memes") titleEl.textContent = "NO MEMES";
+      else if(reasonStr === "no_votes") titleEl.textContent = "NO VOTES";
+      else if(reasonStr === "no_players") titleEl.textContent = "NO PLAYERS";
+      else titleEl.textContent = "ROUND ENDED";
     } else {
-      list.forEach((w) => {
-        const item = document.createElement("div");
-        item.className = "winner-item";
-        item.innerHTML = w.url ? renderMediaHTML(w.url) : `<div class="muted">Нет медиа</div>`;
-        mediaBox.appendChild(item);
-      });
+      titleEl.textContent = isTie ? "IT'S A TIE!" : "ROUND WINNER";
     }
-    mediaBox.classList.toggle("many", list.length > 1);
   }
 
-  // Caption lines
-  const capBox = $("winner-caption");
-  if (capBox) {
-    capBox.innerHTML = "";
-    if (list.length > 0) {
-      list.forEach((w) => {
-        const who = w.nickname ? `От: ${w.nickname}` : "";
-        const votes = Number.isFinite(Number(w.votes)) ? ` (${w.votes})` : "";
-        const line = [who ? `${who}${votes}` : "", w.caption || ""].filter(Boolean).join(" — ");
-        const row = document.createElement("div");
-        row.className = "winner-line";
-        row.textContent = line;
-        capBox.appendChild(row);
-      });
+  const emojiEl = $("winner-emoji");
+  if (emojiEl) emojiEl.textContent = isTie ? "🤝" : "🏆";
+
+  // Confetti regen
+  const confBox = $("winner-confetti");
+  if (confBox) {
+    confBox.innerHTML = "";
+    for (let i = 0; i < 20; i++) {
+      const el = document.createElement("div");
+      el.className = "wsConf";
+      el.style.setProperty("--x", `${Math.random() * 100}%`);
+      el.style.setProperty("--delay", `${(Math.random() * 0.5).toFixed(2)}s`);
+      el.style.setProperty("--dur", `${(2 + Math.random() * 2).toFixed(2)}s`);
+      confBox.appendChild(el);
     }
   }
+
+  // Cards
+  const cardsBox = $("winner-cards");
+  if (cardsBox) {
+    cardsBox.innerHTML = "";
+
+    const makeCard = (w, idx) => {
+      const wrap = document.createElement("div");
+      wrap.className = "wsCardWrap";
+      wrap.style.setProperty("--wsRot", isTie ? (idx % 2 === 0 ? "-10deg" : "10deg") : "0deg");
+
+      // Glow
+      const glow = document.createElement("div");
+      glow.className = "wsGlow";
+      wrap.appendChild(glow);
+
+      // TIE badge (only if tie)
+      if (isTie) {
+        const tie = document.createElement("div");
+        tie.className = "wsTieBadge";
+        tie.textContent = "TIE";
+        tie.style.transitionDelay = `${0.7 + idx * 0.1}s`;
+        wrap.appendChild(tie);
+      }
+
+      const card = document.createElement("div");
+      card.className = "wsCard";
+      card.style.transitionDelay = `${0.5 + idx * 0.1}s`;
+
+      // WINNER pill
+      const pill = document.createElement("div");
+      pill.className = "wsWinnerPill";
+      pill.innerHTML = `<span aria-hidden="true">🏆</span> WINNER`;
+      card.appendChild(pill);
+
+      // Media
+      const media = document.createElement("div");
+      media.className = "wsMedia";
+      if (w && w.url) {
+        media.innerHTML = renderMediaHTML(w.url);
+      } else {
+        media.innerHTML = `<div class="muted" style="padding:12px">Нет медиа</div>`;
+      }
+      card.appendChild(media);
+
+      // Meta
+      const meta = document.createElement("div");
+      meta.className = "wsMeta";
+      const name = document.createElement("div");
+      name.className = "wsName";
+      name.textContent = w && w.nickname ? String(w.nickname) : "PLAYER";
+
+      const cap = document.createElement("div");
+      cap.className = "wsCaption";
+      const capTxt = (w && w.caption) ? String(w.caption) : "";
+      const vTxt = Number.isFinite(Number(w?.votes)) ? String(Number(w.votes)) : "0";
+      cap.textContent = capTxt ? capTxt : (vTxt ? `Votes: ${vTxt}` : "");
+
+      meta.appendChild(name);
+      meta.appendChild(cap);
+      card.appendChild(meta);
+
+      wrap.appendChild(card);
+      return wrap;
+    };
+
+    if (list.length === 0) {
+      let emptyCap = "Нет данных";
+      const r = String(payload?.reason || "");
+      if(r === "no_memes") emptyCap = "Никто не отправил мем";
+      else if(r === "no_players") emptyCap = "Нет игроков";
+      else if(r === "no_votes") emptyCap = "Никто не проголосовал";
+      else if(r === "timer" && (payload?.stats?.votedOnline === 0)) emptyCap = "Никто не проголосовал";
+      cardsBox.appendChild(makeCard({ nickname: "—", caption: emptyCap, url: "" }, 0));
+    } else {
+      list.forEach((w, idx) => cardsBox.appendChild(makeCard(w, idx)));
+    }
+  }
+
+  // Ensure TikTok vars are applied inside overlay (if any)
+  try { applyTTVars && applyTTVars(); } catch (e) {}
+
+  // Cancel previous timers (if overlay is retriggered)
+  if (window.__MB_WIN_TO) clearTimeout(window.__MB_WIN_TO);
+  if (window.__MB_WIN_TO2) clearTimeout(window.__MB_WIN_TO2);
 
   ov.classList.remove("hidden");
   ov.setAttribute("aria-hidden", "false");
 
+  // Restart entrance animation
+  ov.classList.remove("ws-leave");
+  ov.classList.remove("ws-on");
+  void ov.offsetWidth;
+  ov.classList.add("ws-on");
+
   return new Promise((resolve) => {
-    setTimeout(() => {
-      ov.classList.add("hidden");
-      ov.setAttribute("aria-hidden", "true");
-      resolve();
+    window.__MB_WIN_TO = setTimeout(() => {
+      ov.classList.remove("ws-on");
+      ov.classList.add("ws-leave");
+      window.__MB_WIN_TO2 = setTimeout(() => {
+        ov.classList.add("hidden");
+        ov.classList.remove("ws-leave");
+        ov.setAttribute("aria-hidden", "true");
+        resolve();
+      }, 240);
     }, displayMs);
   });
 }
@@ -893,31 +1589,66 @@ let hostPhase = "lobby";
 // -------- Host UI
 function hostSetRoom(code){
   currentRoom = code;
-  $("host-room-code").textContent = code || "—";
-  const link = `${location.origin}/?room=${encodeURIComponent(code)}`;
-  $("host-room-link").textContent = link;
+  const c = String(code || "").trim().toUpperCase();
+
+  $("host-room-code").textContent = c || "—";
+  if ($("host-room-code-mini")) $("host-room-code-mini").textContent = c || "—";
+
+  const link = c ? `${location.origin}/?room=${encodeURIComponent(c)}` : "";
+  if ($("host-room-link")) $("host-room-link").textContent = link;
+  if ($("host-room-link-input")) $("host-room-link-input").value = link;
 
   // QR
-  const qrData = encodeURIComponent(link);
+  const qrData = encodeURIComponent(link || "");
   const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${qrData}`;
   const img = $("host-qr-img");
   const imgBig = $("qr-overlay-img");
   if (img) img.src = qrSrc;
   if (imgBig) imgBig.src = `https://api.qrserver.com/v1/create-qr-code/?size=520x520&data=${qrData}`;
-  const mini = $("host-room-code-mini");
-  if (mini) mini.textContent = code || "—";
 
   const fullBtn = $("host-qr-full");
-  if (fullBtn) fullBtn.disabled = !code;
+  if (fullBtn) fullBtn.disabled = !c;
+
+  // Toggle setup blocks
+  $("host-room-pre")?.classList.toggle("hidden", !!c);
+  $("host-setup-steps")?.classList.toggle("hidden", !!c);
+  $("host-room-post")?.classList.toggle("hidden", !c);
+
+  // Buttons
+  if ($("host-start-game")) $("host-start-game").disabled = !c;
+  if ($("ai-generate")) $("ai-generate").disabled = !c || !aiState.enabled;
 }
+
 $("host-copy-link")?.addEventListener("click", async () => {
-  const link = $("host-room-link").textContent || "";
-  try{ await navigator.clipboard.writeText(link); pushDebug("copy", "ok"); }catch(e){ pushDebug("copy", String(e)); }
+  const btn = $("host-copy-link");
+  const link = $("host-room-link-input")?.value || $("host-room-link")?.textContent || "";
+  if(!link) return;
+  try{
+    await navigator.clipboard.writeText(link);
+    if(btn){ const t = btn.textContent; btn.textContent = "✓"; setTimeout(()=>{ btn.textContent = t; }, 2000); }
+    pushDebug("copy:link", "ok");
+  }catch(e){
+    pushDebug("copy:link", String(e));
+  }
+});
+
+
+$("host-copy-code")?.addEventListener("click", async () => {
+  const btn = $("host-copy-code");
+  const code = $("host-room-code")?.textContent || "";
+  if(!code || code === "—") return;
+  try{
+    await navigator.clipboard.writeText(code);
+    if(btn){ const t = btn.textContent; btn.textContent = "✓"; setTimeout(()=>{ btn.textContent = t; }, 2000); }
+    pushDebug("copy:code", "ok");
+  }catch(e){
+    pushDebug("copy:code", String(e));
+  }
 });
 
 // --- QR overlay
 $("host-qr-full")?.addEventListener("click", () => {
-  const link = $("host-room-link")?.textContent || "";
+  const link = $("host-room-link-input")?.value || $("host-room-link")?.textContent || "";
   $("qr-overlay-link").textContent = link || "—";
   $("qr-overlay").classList.remove("hidden");
 });
@@ -926,7 +1657,7 @@ $("qr-overlay")?.addEventListener("click", (e) => {
   if (e.target && e.target.id === "qr-overlay") $("qr-overlay").classList.add("hidden");
 });
 $("qr-copy")?.addEventListener("click", async () => {
-  const link = $("host-room-link")?.textContent || "";
+  const link = $("host-room-link-input")?.value || $("host-room-link")?.textContent || "";
   try{ await navigator.clipboard.writeText(link); pushDebug("qr:copy", "ok"); }catch(e){ pushDebug("qr:copy", String(e)); }
 });
 $("host-create-room")?.addEventListener("click", () => {
@@ -1153,6 +1884,47 @@ function aiSetStatus(text, mode){
   el.classList.toggle("warn", mode === "warn");
 }
 
+function aiRenderSelectedThemes(){
+  const box = $("ai-selected");
+  const empty = $("ai-no-themes");
+  if(!box) return;
+  const sel = aiGetSelectedThemes();
+  box.innerHTML = "";
+  if(empty) empty.classList.toggle("hidden", sel.length > 0);
+
+  sel.forEach((theme)=>{
+    const chip = document.createElement("div");
+    chip.className = "selChip";
+    chip.setAttribute("data-theme", theme);
+    chip.innerHTML = `<span>${theme}</span><span class="x">×</span>`;
+    chip.title = "Remove";
+    chip.addEventListener("click", ()=>{
+      aiState.selectedThemes = aiGetSelectedThemes().filter(t => t.toLowerCase() !== String(theme).toLowerCase());
+      aiRenderThemeChips();
+      aiUpdateCounters();
+      aiPersist();
+    });
+    box.appendChild(chip);
+  });
+}
+
+function aiApplyThemeFilter(){
+  const q = String($("ai-theme-search")?.value || "").trim().toLowerCase();
+  const box = $("ai-themes");
+  if(!box) return;
+
+  let shown = 0;
+  [...box.children].forEach((el)=>{
+    const t = String(el.getAttribute("data-theme") || "").toLowerCase();
+    const ok = !q || t.includes(q);
+    el.classList.toggle("hidden", !ok);
+    if(ok) shown++;
+  });
+
+  const empty = $("ai-themes-empty");
+  if(empty) empty.classList.toggle("hidden", shown !== 0);
+}
+
 function aiRenderThemeChips(){
   const box = $("ai-themes");
   if(!box) return;
@@ -1190,6 +1962,7 @@ function aiRenderThemeChips(){
         aiState.selectedThemes = aiGetSelectedThemes().filter(t => String(t).toLowerCase() !== String(theme).toLowerCase());
         aiRenderThemeChips();
         aiUpdateCounters();
+        aiPersist();
       });
       chip.appendChild(x);
     }
@@ -1207,12 +1980,15 @@ function aiRenderThemeChips(){
       aiState.selectedThemes = next.slice(0, lim);
       aiRenderThemeChips();
       aiUpdateCounters();
+      aiPersist();
     });
 
     box.appendChild(chip);
   }
 
   aiUpdateCounters();
+  aiRenderSelectedThemes();
+  aiApplyThemeFilter();
 }
 
 function aiSetEnabledUI(on){
@@ -1427,33 +2203,50 @@ function ensureRoom(){
   return true;
 }
 
+
 $("host-start-game")?.addEventListener("click", async () => {
   if(!ensureRoom()) return;
+
   parseTasks();
 
-  // If AI is enabled: generate (or reuse) tasks before starting the game.
-  if(aiState.enabled){
-    const r = await aiGenerateTasks(false);
-    if(r?.ok){
-      aiState.lastGenerated = r.tasks || [];
-      hostState.tasks = (r.tasks || []).slice(0, hostState.totalRounds);
+  // IMPORTANT: tasks generation is a separate button now.
+  if (aiState.enabled){
+    const need = Number(hostState.totalRounds || 0);
+    const has = Array.isArray(aiState.lastGenerated) ? aiState.lastGenerated.length : 0;
+    if (has < need){
+      alert("Сначала нажми «Generate Tasks» (или выключи ИИ).");
+      return;
     }
+    hostState.tasks = aiState.lastGenerated.slice(0, need);
   }
 
+  // Start the game by broadcasting the first task (server has no `host-start-game` event).
   hostState.round = 1;
   hostState.scores = {};
-  hostUpdateRoundInfo();
   renderResults();
+  hostUpdateRoundInfo();
+
+  $("host-next-round").disabled = false;
+  $("host-end-game").disabled = false;
+  $("host-start-vote").disabled = true;
 
   const task = getTaskForRound(hostState.round);
-  socket.emit("host-task-update", { roomCode: currentRoom, roundNumber: hostState.round, task }, (res)=>{
-    pushDebug("host-task-update", res);
+
+  socket.emit("host-task-update", { roomCode: currentRoom, roundNumber: hostState.round, task }, (res) => {
+    pushDebug("host-task-update:first", res);
     if(!res?.ok) return alert(res?.error || "Ошибка");
-    $("host-next-round").disabled = false;
-    $("host-end-game").disabled = false;
-    $("host-start-vote").disabled = true;
+
+    // Switch out of Setup into Round view; room-status keeps it synced afterward.
+    setHostView("round");
+    hostRoundSetTask(task, hostState.round, hostState.totalRounds);
+
+    // Best-effort progress update using last known status
+    if (lastRoomStatus && lastRoomStatus.roomCode === currentRoom){
+      hostRoundUpdateProgress(lastRoomStatus);
+    }
   });
 });
+
 
 
 $("host-start-vote")?.addEventListener("click", () => {
@@ -1468,22 +2261,53 @@ $("host-start-vote")?.addEventListener("click", () => {
 
 function computeRoundPoints(memelist){
   const points = {};
-  if(!Array.isArray(memelist) || memelist.length===0) return { points };
+  if(!Array.isArray(memelist) || memelist.length === 0) return { points };
+
+  // Eligibility rule: players who DID NOT vote get 0 points for the round.
+  // We take eligibility from lastRoomStatus (server truth) when possible.
+  const st = lastRoomStatus;
+  const eligibleById = new Set();
+  const eligibleByNick = new Set();
+  if(st && Array.isArray(st.players)){
+    st.players.forEach(p=>{
+      if(!p) return;
+      if(p.hasVoted){
+        if(p.id) eligibleById.add(String(p.id));
+        if(p.nickname) eligibleByNick.add(String(p.nickname));
+      }
+    });
+  }
+
+  const isEligible = (m)=>{
+    if(!m) return false;
+    const ownerId = m.ownerId ? String(m.ownerId) : "";
+    const nick = m.nickname ? String(m.nickname) : "";
+    if(eligibleById.size) return ownerId && eligibleById.has(ownerId);
+    if(eligibleByNick.size) return nick && eligibleByNick.has(nick);
+    // If we don't have status (should be rare), do not block scoring.
+    return true;
+  };
+
+  // Vote points: 10 per vote (only if eligible)
   memelist.forEach(m=>{
+    if(!isEligible(m)) return;
     const nick = m.nickname || "Игрок";
-    const votePts = Number(m.votes||0) * 10;
+    const votePts = Number(m.votes || 0) * 10;
     points[nick] = (points[nick]||0) + votePts;
   });
-  // +20% bonus to unique winner
+
+  // +20% bonus to unique winner (only if eligible)
   let max = -1;
-  memelist.forEach(m => { max = Math.max(max, Number(m.votes||0)); });
-  const winners = memelist.filter(m => Number(m.votes||0) === max);
+  memelist.forEach(m => { max = Math.max(max, Number(m?.votes || 0)); });
+  const winners = memelist.filter(m => Number(m?.votes || 0) === max);
   if (winners.length === 1){
     const w = winners[0];
-    const nick = w.nickname || "Игрок";
-    const winVotePts = Number(w.votes||0) * 10;
-    const bonus = Math.round(winVotePts * 0.2);
-    points[nick] = (points[nick]||0) + bonus;
+    if(isEligible(w)){
+      const nick = w.nickname || "Игрок";
+      const winVotePts = Number(w.votes||0) * 10;
+      const bonus = Math.round(winVotePts * 0.2);
+      points[nick] = (points[nick]||0) + bonus;
+    }
   }
   return { points };
 }
@@ -1616,6 +2440,73 @@ async function fileToDataUrl(file){
     fr.readAsDataURL(file);
   });
 }
+
+async function fileToArrayBuffer(file){
+  return new Promise((resolve, reject)=>{
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error || new Error("File read error"));
+    fr.readAsArrayBuffer(file);
+  });
+}
+
+// Very small GIF duration parser (sum of GCE delays), returns seconds or null
+function gifDurationSeconds(arrayBuffer){
+  try{
+    const bytes = new Uint8Array(arrayBuffer);
+    let totalCs = 0;
+    for(let i=0;i<bytes.length-7;i++){
+      if(bytes[i]===0x21 && bytes[i+1]===0xF9 && bytes[i+2]===0x04){
+        const delay = bytes[i+4] | (bytes[i+5] << 8); // centiseconds
+        totalCs += delay > 0 ? delay : 10; // treat 0 as 0.1s
+        i += 7;
+      }
+    }
+    const sec = totalCs / 100;
+    return Number.isFinite(sec) && sec > 0 ? Math.round(sec*100)/100 : null;
+  }catch(e){
+    return null;
+  }
+}
+
+function normalizeMemeKindFromDetect(detectType, url){
+  const t = String(detectType || "");
+  if(t.startsWith("image")) return "photo";
+  if(t.startsWith("gif")) return "gif";
+  if(t.startsWith("video") || t === "youtube" || t === "tiktok") return "video";
+  if(t.startsWith("audio")) return "audio";
+  const s = String(url||"").toLowerCase();
+  if(/\.(mp3|wav|ogg|m4a|aac)(\?|#|$)/.test(s)) return "audio";
+  return "unknown";
+}
+
+// Best-effort: duration for direct media URLs (not YouTube/TikTok)
+async function mediaDurationFromUrl(url, kind){
+  if(kind !== "video" && kind !== "audio") return null;
+  return new Promise((resolve)=>{
+    const el = document.createElement(kind === "audio" ? "audio" : "video");
+    el.preload = "metadata";
+    el.muted = true;
+    let done = false;
+    const finish = (v)=>{
+      if(done) return;
+      done = true;
+      try{ el.removeAttribute("src"); el.load(); }catch(e){}
+      resolve(v);
+    };
+    const t = setTimeout(()=>finish(null), 1500);
+    el.onloadedmetadata = ()=>{
+      clearTimeout(t);
+      const d = Number(el.duration);
+      finish(Number.isFinite(d) && d > 0 ? Math.round(d*100)/100 : null);
+    };
+    el.onerror = ()=>{
+      clearTimeout(t);
+      finish(null);
+    };
+    el.src = url;
+  });
+}
 $("player-send-meme")?.addEventListener("click", async () => {
   if(!playerState.joined){ $("player-join-status").textContent = "Сначала войди в комнату"; return; }
   const file = $("player-meme-file").files?.[0] || null;
@@ -1637,8 +2528,18 @@ $("player-send-meme")?.addEventListener("click", async () => {
     url = normalized.url || url;
   }
   const caption = String($("player-meme-caption").value || "").trim();
-  pushDebug("player:send:emit", { roomCode: playerState.roomCode, url: dbgValueShort(url), captionLen: caption.length });
-  socket.emit("player-send-meme", { roomCode: playerState.roomCode, url, caption }, (res)=>{
+  const dt = detectMediaType(url).type;
+  const kind = normalizeMemeKindFromDetect(dt, url);
+  let durationSec = null;
+  if(kind === "gif" && file){
+    try{ durationSec = gifDurationSeconds(await fileToArrayBuffer(file)); }catch(e){}
+  }
+  if(kind === "video" && dt === "video_url") durationSec = await mediaDurationFromUrl(url, "video");
+  if(kind === "audio" && dt === "audio_url") durationSec = await mediaDurationFromUrl(url, "audio");
+
+  const payload = { roomCode: playerState.roomCode, url, caption, meta: { kind, durationSec } };
+  pushDebug("player:send:emit", { roomCode: playerState.roomCode, kind, durationSec, url: dbgValueShort(url), captionLen: caption.length });
+  socket.emit("player-send-meme", payload, (res)=>{
     pushDebug("player-send-meme", res);
     if(!res?.ok){ alert(res?.error || "Ошибка отправки"); return; }
     $("player-sent").classList.remove("hidden");
@@ -1677,8 +2578,44 @@ socket.on("room-status", (st) => {
     hostMemesCount = Number(st.memesCount || 0);
     hostMemesRevealed = !!st.memesRevealed;
     $("host-phase").textContent = `Фаза: ${st.phase || "—"}`;
+    // Screen split: show Round view during collect, Voting view during vote
+    const hostVisible = (!screens.host.classList.contains("hidden"));
+    if(hostVisible && st.phase && st.phase !== "lobby"){
+      if(st.phase === "collect"){
+        setHostView("round");
+        if(st.task) hostRoundSetTask(st.task, hostState.round, hostState.totalRounds);
+        hostRoundUpdateProgress(st);
+      } else if(st.phase === "vote"){
+        const prevView = hostView;
+        setHostView("voting");
 
-    // players list with indicators
+        // keep server vote timer synced even if "voting-started" was missed (reconnect / reload)
+        try{
+          const ve = Number(st.voteEndsAt || 0);
+          if(Number.isFinite(ve) && ve > 0 && ve !== Number(hostVoteState.voteEndsAt || 0)){
+            pushDebug("sync:voteEndsAt_from_status", { from: hostVoteState.voteEndsAt || 0, to: ve, serverNow: st.serverNow || null });
+            hostVoteState.voteEndsAt = ve;
+            hostVoteState.voteStartAt = 0;
+          }
+          const vs = Number(st.voteSeconds || 0);
+          if(Number.isFinite(vs) && vs > 0 && vs !== Number(hostVoteState.secondsTotal || 0)){
+            pushDebug("sync:voteSeconds_from_status", { from: hostVoteState.secondsTotal || 0, to: vs });
+            hostVoteState.secondsTotal = Math.max(5, vs);
+          }
+        }catch(e){}
+
+        hostRoundStopTimer();
+        try{
+          // Enter once per vote phase; keep re-rendering while status updates.
+          if(prevView !== "voting") hostVoteEnter(st);
+          else hostVoteRender(st);
+        }catch(e){}
+      } else {
+        setHostView("game");
+        hostRoundStopTimer();
+      }
+    }
+// players list with indicators
     const box = $("host-players");
     if (box){
       box.innerHTML = "";
@@ -1691,9 +2628,40 @@ socket.on("room-status", (st) => {
         el.innerHTML = `<div><b>${p.nickname}</b> ${s1}</div><div class="st">${s2} • ${s3}</div>`;
         box.appendChild(el);
       });
-    }
+}
 
-    // IMPORTANT: host should NOT see memes during collect until revealed
+// setup screen players list (online/offline indicators)
+const boxSetup = $("host-players-setup");
+if (boxSetup){
+  boxSetup.innerHTML = "";
+  const ps = Array.isArray(st.players) ? st.players : [];
+  if(ps.length === 0){
+    boxSetup.innerHTML = `<div class="muted">No players yet</div>`;
+  } else {
+    ps.forEach(p=>{
+      const row = document.createElement("div");
+      row.className = "plmini";
+      const online = !!(p && p.connected);
+      const dot = document.createElement("span");
+      dot.className = `dot ${online ? "dotOn" : "dotOff"}`;
+      const name = document.createElement("span");
+      name.className = online ? "nm" : "nm off";
+      name.textContent = (p && p.nickname) ? p.nickname : "PLAYER";
+      row.appendChild(dot);
+      row.appendChild(name);
+      if(!online){
+        const off = document.createElement("span");
+        off.className = "offIcon";
+        off.title = "offline";
+        off.textContent = "📡";
+        row.appendChild(off);
+      }
+      boxSetup.appendChild(row);
+    });
+  }
+}
+
+// IMPORTANT: host should NOT see memes during collect until revealed
     hostLatestMemes = Array.isArray(st.memes) ? st.memes : [];
     const memesBox = $("host-memes");
     if (memesBox){
@@ -1774,19 +2742,47 @@ socket.on("round-task", (p) => {
     $("player-meme-file").value = "";
   }
 
-  // Host: UI hints
+  // Host: UI hints + switch to Round screen
   if (p?.roomCode === currentRoom){
     $("host-phase").textContent = "Фаза: collect";
     $("host-vote-finished")?.classList.add("hidden");
     if ($("host-start-vote")) { $("host-start-vote").classList.remove("hidden"); $("host-start-vote").disabled = true; }
+
+    // New Round screen
+    const hostVisible = (!screens.host.classList.contains("hidden"));
+    if(hostVisible){
+      hostState.round = p.round || hostState.round;
+      hostState.totalRounds = p.totalRounds || hostState.totalRounds;
+      hostRoundSetTask(p.task || "—", hostState.round, hostState.totalRounds);
+      setHostView("round");
+      hostRoundStartTimer(p.countdownSeconds || 60);
+      hostRoundUpdateProgress(lastRoomStatus);
+    }
   }
 });
 
 
 
-socket.on("voting-started", ({ roomCode, memes }) => {
+socket.on("voting-started", ({ roomCode, memes, voteSeconds, voteEndsAt }) => {
   // hide next-round UI until voting is finished
   nextUiDelayDone = false;
+
+  // sync vote timer length from server (if provided)
+  try{ if(Number.isFinite(Number(voteSeconds))) hostVoteState.secondsTotal = Math.max(5, Number(voteSeconds)); }catch(e){}
+  // sync voteEndsAt from server for accurate countdown
+  try{
+    const ve = Number(voteEndsAt);
+    if(Number.isFinite(ve) && ve > 0){
+      hostVoteState.voteEndsAt = ve;
+      hostVoteState.voteStartAt = 0;
+    }else if(!(hostVoteState.voteEndsAt > 0)){
+      const vs = Number(voteSeconds);
+      if(Number.isFinite(vs) && vs > 0) hostVoteState.voteEndsAt = Date.now() + vs * 1000;
+    }
+  }catch(e){}
+  try{ pushDebug("voting-started", { roomCode, voteSeconds, voteEndsAt, clientNow: Date.now() }); }catch(e){}
+
+
   $("player-next-wrap")?.classList.add("hidden");
   $("host-ready-next")?.classList.add("hidden");
   if (playerState.joined && roomCode === playerState.roomCode){
@@ -1870,7 +2866,7 @@ socket.on("all-ready-next", ({ roomCode, roundNumber, ready, total }) => {
   hostAutoNextLock = true;
   setTimeout(() => {
     $("host-next-round")?.click();
-  }, 50);
+  }, 200);
 });
 
 socket.on("game-finished", ({ roomCode, results }) => {
@@ -3112,7 +4108,155 @@ function atResetStepButton(){
 })();
 
 
+function hostSetupInit(){
+  // rounds input <-> slider sync
+  const num = $("host-total-rounds");
+  const rng = $("host-total-rounds-range");
+  if (num && rng){
+    const clamp = (v)=> Math.max(1, Math.min(20, Number(v||5)));
+    const apply = ()=>{
+      const v = clamp(num.value);
+      num.value = String(v);
+      rng.value = String(v);
+      try{ aiUpdateCounters(); }catch(e){}
+      try{ aiRenderThemeChips(); }catch(e){}
+    };
+    num.addEventListener("input", apply);
+    rng.addEventListener("input", ()=>{
+      num.value = String(clamp(rng.value));
+      num.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    apply();
+  }
+
+  // AI themes browse panel
+  const browseBtn = $("ai-browse-btn");
+  const panel = $("ai-browse-panel");
+  const chev = $("ai-browse-chev");
+  browseBtn?.addEventListener("click", ()=>{
+    if(!panel) return;
+    const open = panel.classList.contains("hidden");
+    panel.classList.toggle("hidden");
+    if(chev) chev.classList.toggle("open", !panel.classList.contains("hidden"));
+    if(!panel.classList.contains("hidden")){
+      $("ai-theme-search")?.focus();
+      aiApplyThemeFilter();
+    }
+  });
+  $("ai-theme-search")?.addEventListener("input", ()=> aiApplyThemeFilter());
+
+  // Absurdity slider <-> legacy ai-level mapping
+  const abs = $("ai-absurdity");
+  const absVal = $("ai-absurdity-val");
+  const lvl = $("ai-level");
+  const absToLevel = (p)=>{
+    const v = Number(p||0);
+    if(v <= 20) return 1;
+    if(v <= 40) return 2;
+    if(v <= 60) return 3;
+    if(v <= 80) return 4;
+    return 5;
+  };
+  const levelToAbs = (l)=>{
+    const v = Number(l||3);
+    return [10, 30, 50, 70, 90][Math.max(1, Math.min(5, v)) - 1];
+  };
+  const updAbsLabel = ()=>{
+    if(abs && absVal) absVal.textContent = `${abs.value}%`;
+  };
+  if(abs && lvl){
+    // init from stored ai-level
+    abs.value = String(levelToAbs(Number(lvl.value || 3)));
+    updAbsLabel();
+
+    abs.addEventListener("input", ()=>{
+      updAbsLabel();
+      const next = absToLevel(abs.value);
+      if(String(lvl.value) !== String(next)){
+        lvl.value = String(next);
+        lvl.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+
+    // if something changes ai-level (e.g. restore), keep slider in sync
+    lvl.addEventListener("change", ()=>{
+      abs.value = String(levelToAbs(Number(lvl.value || 3)));
+      updAbsLabel();
+    });
+  }
+
+  // Custom tasks list UI (writes into hidden #host-tasks textarea)
+  const input = $("setup-custom-input");
+  const addBtn = $("setup-custom-add");
+  const list = $("setup-custom-list");
+  const tasksArea = $("host-tasks");
+  let tasks = [];
+
+  const readTasks = ()=>{
+    const raw = String(tasksArea?.value || "");
+    tasks = raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  };
+  const writeTasks = ()=>{
+    if(tasksArea) tasksArea.value = tasks.join("\n");
+  };
+  const render = ()=>{
+    if(!list) return;
+    list.innerHTML = "";
+    tasks.forEach((t, i)=>{
+      const row = document.createElement("div");
+      row.className = "customItem";
+      const txt = document.createElement("div");
+      txt.className = "customText";
+      txt.textContent = t;
+      const del = document.createElement("button");
+      del.className = "customDel";
+      del.type = "button";
+      del.title = "Remove";
+      del.textContent = "×";
+      del.addEventListener("click", ()=>{
+        tasks.splice(i, 1);
+        writeTasks();
+        render();
+      });
+      row.appendChild(txt);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  };
+  const refresh = ()=>{ readTasks(); render(); };
+
+  refresh();
+
+  const enableAdd = ()=>{
+    const v = String(input?.value || "").trim();
+    if(addBtn) addBtn.disabled = !v;
+  };
+  enableAdd();
+  input?.addEventListener("input", enableAdd);
+  input?.addEventListener("keydown", (e)=>{
+    if(e.key === "Enter" && !e.shiftKey){
+      e.preventDefault();
+      if(!addBtn?.disabled) addBtn.click();
+    }
+  });
+  addBtn?.addEventListener("click", ()=>{
+    const v = String(input?.value || "").trim();
+    if(!v) return;
+    tasks.push(v);
+    input.value = "";
+    enableAdd();
+    writeTasks();
+    render();
+  });
+
+  // sync if AI writes into textarea (legacy)
+  $("ai-to-textarea")?.addEventListener("click", ()=> setTimeout(refresh, 50));
+}
+
 aiInit();
+
+// Setup screen wiring (sliders, theme browser, custom tasks list)
+try{ hostSetupInit(); }catch(e){ pushDebug("hostSetupInit:error", String(e?.message || e)); }
 
 // Start on mode screen
 showScreen("mode");
