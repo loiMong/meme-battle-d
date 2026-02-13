@@ -4,11 +4,30 @@
  * - Socket.IO realtime room state
  * - Host anonymity: memes are not sent in room-status during collect until revealed
  */
+
+/* =====================================================================
+   [MB-ANCHORS] Server.js quick map (поиск по файлу)
+   - [ANCHOR] MB:S:CONFIG
+   - [ANCHOR] MB:S:ADMIN_LOG
+   - [ANCHOR] MB:S:HTTP_ROUTES
+   - [ANCHOR] MB:S:ROOM_STORE
+   - [ANCHOR] MB:S:ROOM_HELPERS
+   - [ANCHOR] MB:S:VOTING_CORE
+   - [ANCHOR] MB:S:TIMERS
+   - [ANCHOR] MB:S:OPENAI_TASKS
+   - [ANCHOR] MB:S:SOCKET_IO
+   - [ANCHOR] MB:S:SOCKET:HOST_*
+   - [ANCHOR] MB:S:SOCKET:PLAYER_*
+   - [ANCHOR] MB:S:ADMIN_API
+   ===================================================================== */
+
 const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 
+
+// [ANCHOR] MB:S:CONFIG — env + defaults
 const PORT = process.env.PORT || 3000;
 
 const ROUND_SECONDS_DEFAULT = Number(process.env.ROUND_SECONDS || 60);
@@ -20,10 +39,20 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 25000);
 
 
-const APP_VERSION = process.env.APP_VERSION || "0.1.3-beta";
+// [ANCHOR] MB:S:VERSION
+const APP_VERSION = process.env.APP_VERSION || "0.1.18-beta";
 const ADMIN_TOKEN = String(process.env.ADMIN_TOKEN || "dev").trim(); // ⚠️ поменяй в Secrets/ENV
 
 const STARTED_AT = Date.now();
+
+
+// [ANCHOR] MB:S:DEBUG_TOGGLE — global + per-room debug timeline
+// MB_DEBUG=0 disables verbose room debug (timeline + timer-debug emits). Admin API logging still works.
+const DEBUG = !["0","false","off","no"].includes(String(process.env.MB_DEBUG || "1").toLowerCase());
+const DEBUG_TIMELINE_MAX = Number(process.env.MB_DEBUG_TIMELINE_MAX || 300);
+
+
+// [ANCHOR] MB:S:ADMIN_LOG — counters + ring buffer
 const adminTotals = {
   httpApiRequests: 0,
   roomsCreated: 0,
@@ -34,6 +63,8 @@ const adminTotals = {
 };
 const ADMIN_EVENTS_MAX = 600;
 const adminEvents = [];
+
+// [ANCHOR] MB:S:ADMIN_LOG:HELPERS
 function logAdmin(tag, detail, level = "info"){
   const e = { ts: new Date().toISOString(), tag: String(tag), level, detail };
   adminEvents.unshift(e);
@@ -238,6 +269,8 @@ function fallbackTasks(themes, rounds){
   return out;
 }
 
+
+// [ANCHOR] MB:S:OPENAI_TASKS — OpenAI call + parsing/validation
 async function openaiGenerateTasks({ themes, rounds, humorLevel }){
   if(!OPENAI_API_KEY) throw new Error("E_NO_OPENAI_KEY");
 
@@ -376,9 +409,22 @@ async function openaiGenerateTasks({ themes, rounds, humorLevel }){
 }
 // === END AI TASKS ===
 
-app.use(express.static(path.join(__dirname, ".")));
+// Prevent aggressive mobile caching (especially for script/style updates)
+app.use(express.static(path.join(__dirname, "."), {
+  setHeaders(res, filePath){
+    try{
+      // No-store for html/css/js to ensure fast rollout; keep it simple.
+      if(/\.(?:html|css|js)$/i.test(String(filePath||""))){
+        res.setHeader("Cache-Control", "no-store");
+      }
+    }catch(e){}
+  }
+}));
+
+// [ANCHOR] MB:S:HTTP_ROUTES
 app.get("/health", (req, res) => res.json({ ok: true, ts: new Date().toISOString(), version: APP_VERSION, adminTokenConfigured: ADMIN_TOKEN !== "dev" }));
 app.get("/api/version", (req, res) => res.json({ ok:true, version: APP_VERSION }));
+app.get("/join/:code", (req,res)=> res.sendFile(path.join(__dirname, "index.html")));
 const io = new Server(server, {
   cors: { origin: "*" },
   transports: ["websocket", "polling"],
@@ -407,8 +453,12 @@ function randomCode(len = 4) {
   return s;
 }
 
+
+// [ANCHOR] MB:S:ROOM_STORE — in-memory state
 const rooms = Object.create(null);
 
+
+// [ANCHOR] MB:S:ROOM_HELPERS
 function createRoom(hostId) {
   let code = randomCode();
   while (rooms[code]) code = randomCode();
@@ -430,6 +480,9 @@ function createRoom(hostId) {
     nickIndex: Object.create(null),
     socketToPlayerId: Object.create(null),
     memes: [],           // {id,url,caption,ownerId,nickname,votes}
+    // room-level debug (controlled by host via debug toggle)
+    debugEnabled: false,
+    debugTimeline: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -444,9 +497,11 @@ function playersArray(room) {
     id: p.id,
     nickname: p.nickname,
     connected: !!p.connected,
-      readyNext: !!p.readyNext,
+    score: Number(p.score||0),
     hasMeme: !!p.hasMeme,
     hasVoted: !!p.hasVoted,
+    missedVote: !!p.missedVote,
+    readyNext: !!p.readyNext,
   }));
 }
 function publicMemes(room) {
@@ -454,17 +509,20 @@ function publicMemes(room) {
   if (room.phase === "collect" && !room.memesRevealed) return [];
   return room.memes;
 }
-function broadcast(room) {
+
+// [ANCHOR] MB:S:BROADCAST_TARGETED — build room-status once and emit to specific targets
+function buildRoomStatusPayload(room){
   ensureRoomTimers(room);
   try{ ensureTimerMeta(room); }catch(e){}
   const now = Date.now();
   const tCollect = room.timerMeta?.collect || {};
   const tVote = room.timerMeta?.vote || {};
 
-  io.to(room.code).emit("room-status", {
+  return {
     roomCode: room.code,
     phase: room.phase,
     roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds,
     task: room.task,
     locked: !!room.locked,
     memesRevealed: !!room.memesRevealed,
@@ -494,7 +552,18 @@ function broadcast(room) {
     memesCount: room.memes.length,
     players: playersArray(room),
     memes: publicMemes(room),
-  });
+  };
+}
+
+function emitRoomStatusTo(room, target){
+  try{
+    if(!room || !target) return;
+    io.to(target).emit("room-status", buildRoomStatusPayload(room));
+  }catch(e){}
+}
+
+function broadcast(room) {
+  emitRoomStatusTo(room, room.code);
 }
 
 
@@ -527,22 +596,73 @@ function checkAllVotesReady(room){
 }
 
 
+
+// === Room Debug Timeline Helpers ===
+// Per-room ring buffer timeline. Controlled by host (room.debugEnabled).
+function tlPush(room, tag, detail){
+  try{
+    if(!DEBUG) return;
+    if(!room || !room.code) return;
+    if(!room.debugEnabled) return;
+    if(!Array.isArray(room.debugTimeline)) room.debugTimeline = [];
+    const entry = {
+      ts: new Date().toISOString(),
+      serverNow: Date.now(),
+      tag: String(tag || ""),
+      phase: room.phase || null,
+      roundNumber: Number(room.roundNumber || 0),
+      detail: (detail === undefined) ? null : detail,
+    };
+    room.debugTimeline.unshift(entry);
+    if(room.debugTimeline.length > DEBUG_TIMELINE_MAX) room.debugTimeline.length = DEBUG_TIMELINE_MAX;
+    io.to(room.code).emit("debug-timeline", entry);
+  }catch(e){}
+}
+
+function emitDebugState(room){
+  try{
+    if(!room || !room.code) return;
+    io.to(room.code).emit("debug-state", {
+      roomCode: room.code,
+      debugEnabled: !!room.debugEnabled,
+      timelineSize: Array.isArray(room.debugTimeline) ? room.debugTimeline.length : 0,
+      serverNow: Date.now(),
+    });
+  }catch(e){}
+}
+
+function emitDebugSnapshot(room, socket){
+  try{
+    if(!room || !room.code) return;
+    const snap = {
+      roomCode: room.code,
+      debugEnabled: !!room.debugEnabled,
+      serverNow: Date.now(),
+      timeline: Array.isArray(room.debugTimeline) ? room.debugTimeline.slice(0, DEBUG_TIMELINE_MAX) : [],
+    };
+    if(socket && socket.id) io.to(socket.id).emit("debug-snapshot", snap);
+    else io.to(room.code).emit("debug-snapshot", snap);
+  }catch(e){}
+}
+
 // === Timer Debug Helpers ===
 function emitTimerDebug(room, action, data){
   try{
+    if(!DEBUG) return;
     if(!room || !room.code) return;
+    if(!room.debugEnabled) return;
     const payload = {
       roomCode: room.code,
       action: String(action || ""),
       serverNow: Date.now(),
       ...((data && typeof data === "object") ? data : { data })
     };
-    // send to clients (DEBUG panel listens to this)
     io.to(room.code).emit("timer-debug", payload);
-    // keep in admin log for investigation
+    tlPush(room, `timer:${String(action||"")}`, payload);
     logAdmin("timer_debug", payload);
   }catch(e){}
 }
+
 function ensureTimerMeta(room){
   if(!room) return;
   if(!room.timerMeta || typeof room.timerMeta !== "object") room.timerMeta = {};
@@ -566,6 +686,8 @@ function ensureRoomTimers(room){
 }
 
 
+
+// [ANCHOR] MB:S:TIMERS — schedule/clear per-room timers
 function clearRoomTimer(room, key){
   if(!room) return;
   ensureRoomTimers(room);
@@ -587,6 +709,8 @@ function clearRoomTimer(room, key){
   }catch(e){}
 }
 
+
+// [ANCHOR] MB:S:TIMERS:CORE
 function scheduleRoomTimer(room, key, ms, fn){
   if(!room) return;
   ensureRoomTimers(room);
@@ -625,6 +749,8 @@ function scheduleRoomTimer(room, key, ms, fn){
 }
 
 
+
+// [ANCHOR] MB:S:VOTING_CORE — scoring + winners + phase transition
 function finalizeVoting(room, reason = "timer"){
   if(!room) return;
   if(room.phase !== "vote") return;
@@ -635,8 +761,12 @@ function finalizeVoting(room, reason = "timer"){
   room.voteComplete = true;
   room.updatedAt = Date.now();
 
-  // reset next-round ready flags (if used)
-  Object.values(room.playersById || {}).forEach(p => { p.readyNext = false; });
+  // Mark missed votes (connected players who didn't vote by the end)
+  const players = Object.values(room.playersById || {});
+  players.forEach(p => {
+    if(!p) return;
+    if(p.connected && !p.hasVoted) p.missedVote = true;
+  });
 
   const memes = Array.isArray(room.memes) ? room.memes : [];
   let maxVotes = -Infinity;
@@ -662,54 +792,113 @@ function finalizeVoting(room, reason = "timer"){
 
   let winner = winners[0] || null;
 
-  const players = Object.values(room.playersById || {});
   const playersOnline = players.filter(p => !!p.connected);
   const votedAny = players.filter(p => !!p.hasVoted);
   const votedOnline = playersOnline.filter(p => !!p.hasVoted);
   const submittedOnline = playersOnline.filter(p => !!p.hasMeme);
 
-// Special scenario: nobody voted.
-// - If there is exactly 1 meme: declare it as winner (so the game can move on logically).
-// - If there are 2+ memes: show "NO VOTES" (no winner / no tie).
-const baseReason = String(reason || "");
-if(votedAny.length === 0 && baseReason !== "no_players" && baseReason !== "no_memes"){
-  if(memes.length === 1){
-    reason = "single_meme";
-    // keep winners/winner as-is (it will be that single meme)
-  } else {
+  // If nobody voted at all -> explicit "no_votes" (no winner / no tie).
+  const baseReason = String(reason || "");
+  if(votedAny.length === 0 && baseReason !== "no_players" && baseReason !== "no_memes"){
     reason = "no_votes";
   }
-}
-if(reason === "no_votes"){
-  maxVotes = 0;
-  winners.length = 0;
-  winner = null;
-}
+  if(String(reason) === "no_votes"){
+    maxVotes = 0;
+    winners.length = 0;
+    winner = null;
+  }
 
-  // room-status should reflect voteComplete before emitting overlay
+  // [ANCHOR] MB:S:SCORE_APPLY — apply round points to server scores so players see live leaderboard
+  // Mirrors client computeRoundPoints(): 10 pts per vote; +20% bonus to unique winner; players who didn't vote get 0.
+  try{
+    const eligibleIds = new Set();
+    players.forEach(p => {
+      if(p && p.hasVoted && p.id) eligibleIds.add(String(p.id));
+    });
+
+    const pointsByPlayerId = Object.create(null);
+
+    // Vote points: 10 per vote (only if eligible)
+    for(const m of memes){
+      const ownerId = (m && m.ownerId) ? String(m.ownerId) : "";
+      if(!ownerId) continue;
+      if(eligibleIds.size && !eligibleIds.has(ownerId)) continue;
+
+      const votePts = Number(m?.votes || 0) * 10;
+      if(!Number.isFinite(votePts)) continue;
+
+      pointsByPlayerId[ownerId] = (pointsByPlayerId[ownerId] || 0) + votePts;
+    }
+
+    // +20% bonus to unique winner (only if eligible)
+    if(winners.length === 1){
+      const w = winners[0];
+      const ownerId = (w && w.ownerId) ? String(w.ownerId) : "";
+      if(ownerId && (!eligibleIds.size || eligibleIds.has(ownerId))){
+        const base = Number(w?.votes || 0) * 10;
+        const bonus = Math.round(base * 0.2);
+        if(Number.isFinite(bonus) && bonus){
+          pointsByPlayerId[ownerId] = (pointsByPlayerId[ownerId] || 0) + bonus;
+        }
+      }
+    }
+
+    // Apply to room state
+    Object.entries(pointsByPlayerId).forEach(([pid, pts])=>{
+      const pl = room.playersById && room.playersById[pid];
+      if(!pl) return;
+      pl.score = Number(pl.score || 0) + (Number(pts) || 0);
+    });
+
+    room.lastRoundPoints = pointsByPlayerId;
+    room.lastRoundScoredRound = room.roundNumber;
+    room.updatedAt = Date.now();
+
+    tlPush(room, "score-applied", { roundNumber: room.roundNumber, pointsByPlayerId });
+    logAdmin("round_scored", { roomCode: room.code, roundNumber: room.roundNumber, pointsByPlayerId });
+  }catch(e){
+    tlPush(room, "score-applied:error", { err: String(e?.message || e) });
+  }
+
+
+  // room-status should reflect voteComplete + missedVote before emitting overlay
   broadcast(room);
 
   io.to(room.code).emit("voting-finished", {
     roomCode: room.code,
     roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds,
     winner,
     winners,
     maxVotes,
+    players: playersArray(room),
+    pointsByPlayerId,
     tie: winners.length > 1,
-    displayMs: 3000,
+    displayMs: 0, // Winner screen does NOT auto-close; closes on next round start
     reason,
     stats: {
       playersOnline: playersOnline.length,
       votedOnline: votedOnline.length,
       submittedOnline: submittedOnline.length,
+      missedOnline: playersOnline.filter(p => !!p.missedVote).length,
       memes: memes.length,
       voteEndsAt: room.voteEndsAt || 0,
     },
   });
 
-  logAdmin("voting_finished", { roomCode: room.code, roundNumber: room.roundNumber, reason, maxVotes, winners: winners.length, votedOnline: votedOnline.length, memes: memes.length });
+  tlPush(room, "voting-finished", { reason, maxVotes, winners: winners.length, votedAny: votedAny.length, missedOnline: playersOnline.filter(p=>!!p.missedVote).length });
+  emitDebugState(room);
+
+  logAdmin("voting_finished", { roomCode: room.code, roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds, reason, maxVotes, winners: winners.length, votedOnline: votedOnline.length, memes: memes.length });
+
+  // Auto-advance trigger (host listens), based on mandatory players only.
+  maybeEmitAllReadyNext(room);
 }
 
+
+
+// [ANCHOR] MB:S:TIMERS:VOTE
 function clearVoteTimer(room){
   // compatibility wrapper: voting timer is managed via room.timers
   clearRoomTimer(room, "vote");
@@ -804,6 +993,8 @@ function computeVoteSecondsFromMemes(memes){
   return { total, parts };
 }
 
+
+// [ANCHOR] MB:S:VOTING_CORE — start + timers + reveal
 function startVoting(room, mode = "host"){
   if(!room) return;
 
@@ -833,6 +1024,9 @@ function startVoting(room, mode = "host"){
   room.voteEndsAt = room.voteStartAt + room.voteSeconds * 1000;
   room.voteSessionId = "v_" + Math.random().toString(36).slice(2, 10);
 
+  tlPush(room, "voting-started", { mode, memes: room.memes.length, voteSeconds: room.voteSeconds, voteEndsAt: room.voteEndsAt });
+  emitDebugState(room);
+
   io.to(room.code).emit("voting-started", {
     roomCode: room.code,
     memes: room.memes,
@@ -848,6 +1042,7 @@ function startVoting(room, mode = "host"){
   logAdmin("voting_started", {
     roomCode: room.code,
     roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds,
     memes: room.memes.length,
     voteSeconds: room.voteSeconds,
     mode,
@@ -875,7 +1070,9 @@ function startVoting(room, mode = "host"){
     }, 0);
 
     room.updatedAt = Date.now();
-    broadcast(room);
+    // [ANCHOR] MB:S:SOCKET:PLAYER_READY_NEXT:SOFT_BROADCAST — same as votes (no room-wide blink)
+    if (room.hostId) emitRoomStatusTo(room, room.hostId);
+    else broadcast(room);
     return;
   }
 
@@ -905,6 +1102,8 @@ function maybeFinishVoting(room){
   }
 }
 
+
+// [ANCHOR] MB:S:TIMERS:COLLECT
 function scheduleCollectTimer(room, seconds){
   if(!room) return;
   clearRoomTimer(room, "collect");
@@ -935,29 +1134,25 @@ function requireAdmin(req, res){
 function maybeEmitAllReadyNext(room) {
   if (!room) return;
   if (room.phase !== "vote" || !room.voteComplete) return;
-  const connectedPlayers = Object.values(room.playersById).filter((p) => p.connected);
-  const total = connectedPlayers.length;
+
+  // Mandatory for auto-advance: only players who actually voted AND are connected.
+  const mandatory = Object.values(room.playersById || {}).filter((p) => p && p.connected && p.hasVoted);
+  const total = mandatory.length;
+
+  // Scenario "nobody voted": auto-advance is DISABLED (host emergency button only).
   if (total <= 0) return;
-  const ready = connectedPlayers.filter((p) => p.readyNext).length;
+
+  const ready = mandatory.filter((p) => !!p.readyNext).length;
+
   if (ready >= total) {
-    // tell host to advance (host can ignore readiness anyway; this is the auto path)
-    if (room.hostId) {
-      io.to(room.hostId).emit("all-ready-next", {
-        roomCode: room.code,
-        roundNumber: room.roundNumber,
-        ready,
-        total,
-      });
-    }
-    // also broadcast for UI
-    io.to(room.code).emit("all-ready-next", {
-      roomCode: room.code,
-      roundNumber: room.roundNumber,
-      ready,
-      total,
-    });
+    const payload = { roomCode: room.code, roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds, ready, total };
+    if (room.hostId) io.to(room.hostId).emit("all-ready-next", payload);
+    io.to(room.code).emit("all-ready-next", payload);
+    tlPush(room, "all-ready-next", payload);
   }
 }
+
 
 
 function roomSummary(room){
@@ -969,6 +1164,7 @@ function roomSummary(room){
     code: room.code,
     phase: room.phase,
     roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds,
     playersTotal,
     playersOnline,
     memesCount,
@@ -991,6 +1187,7 @@ function roomDetail(room){
       readyNext: !!p.readyNext,
       hasMeme: !!p.hasMeme,
       hasVoted: !!p.hasVoted,
+      missedVote: !!p.missedVote,
       lastSeen: p.lastSeen || null,
       score: Number(p.score || 0),
     })),
@@ -1334,9 +1531,14 @@ app.post("/api/admin/sandbox/real/reset-round", (req, res) => {
 
 // ===== END Admin API =====
 
+
+// [ANCHOR] MB:S:SOCKET_IO — realtime events
 io.on("connection", (socket) => {
   // Client-side debug reports (helps track timer hangs / desync)
-  socket.on("debug-report", (payload) => {
+  
+
+  // [ANCHOR] MB:S:SOCKET:DEBUG_REPORT
+socket.on("debug-report", (payload) => {
     try{
       const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").toUpperCase().trim();
       logAdmin("debug_report", {
@@ -1345,11 +1547,74 @@ io.on("connection", (socket) => {
         roomCode: roomCode || null,
         payload: payload || null,
       });
+
+
+// [ANCHOR] MB:S:SOCKET:HOST_DEBUG_SET — per-room debug toggle (timeline + timer debug)
+socket.on("host-debug-set", (payload, cb) => {
+  try{
+    const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").toUpperCase().trim();
+    const room = getRoom(roomCode);
+    if(!room) return cbErr(cb, "E_ROOM_NOT_FOUND", "Комната не найдена");
+    if(!ensureHost(room, socket, cb)) return;
+
+    room.debugEnabled = !!payload?.enabled;
+    if(!Array.isArray(room.debugTimeline)) room.debugTimeline = [];
+
+    emitDebugState(room);
+    emitDebugSnapshot(room, socket);
+
+    if(room.debugEnabled) tlPush(room, "debug-enabled", { enabled: true });
+    logAdmin("host_debug_set", { roomCode: room.code, enabled: !!room.debugEnabled });
+
+    cbOk(cb, { debugEnabled: !!room.debugEnabled, timelineSize: room.debugTimeline.length });
+  }catch(e){
+    cbErr(cb, "E_DEBUG_SET", "Ошибка debug toggle", String(e));
+  }
+});
+
+// [ANCHOR] MB:S:SOCKET:HOST_DEBUG_SNAPSHOT — fetch room timeline snapshot
+socket.on("host-debug-snapshot", (payload, cb) => {
+  try{
+    const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").toUpperCase().trim();
+    const room = getRoom(roomCode);
+    if(!room) return cbErr(cb, "E_ROOM_NOT_FOUND", "Комната не найдена");
+    if(!ensureHost(room, socket, cb)) return;
+
+    emitDebugState(room);
+    emitDebugSnapshot(room, socket);
+    logAdmin("host_debug_snapshot", { roomCode: room.code, size: Array.isArray(room.debugTimeline) ? room.debugTimeline.length : 0 });
+    cbOk(cb);
+  }catch(e){
+    cbErr(cb, "E_DEBUG_SNAPSHOT", "Ошибка snapshot", String(e));
+  }
+});
+
+// [ANCHOR] MB:S:SOCKET:HOST_DEBUG_CLEAR — clear room timeline
+socket.on("host-debug-clear", (payload, cb) => {
+  try{
+    const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").toUpperCase().trim();
+    const room = getRoom(roomCode);
+    if(!room) return cbErr(cb, "E_ROOM_NOT_FOUND", "Комната не найдена");
+    if(!ensureHost(room, socket, cb)) return;
+
+    room.debugTimeline = [];
+    emitDebugState(room);
+    emitDebugSnapshot(room, socket);
+
+    logAdmin("host_debug_clear", { roomCode: room.code });
+    cbOk(cb);
+  }catch(e){
+    cbErr(cb, "E_DEBUG_CLEAR", "Ошибка clear", String(e));
+  }
+});
+
     }catch(e){}
   });
 
 
-  socket.on("host-create-room", (cb) => {
+  
+    // [ANCHOR] MB:S:SOCKET:HOST_CREATE_ROOM
+socket.on("host-create-room", (cb) => {
     try {
       const roomCode = createRoom(socket.id);
       incTotal("roomsCreated", 1);
@@ -1358,13 +1623,19 @@ io.on("connection", (socket) => {
       socket.data.roomCode = roomCode;
       socket.data.role = "host";
       cbOk(cb, { roomCode });
-      broadcast(getRoom(roomCode));
+      const room = getRoom(roomCode);
+      broadcast(room);
+      emitDebugState(room);
+      emitDebugSnapshot(room, socket);
     } catch {
       cbErr(cb, "E_CREATE_ROOM", "Не удалось создать комнату");
     }
   });
 
 
+
+
+  // [ANCHOR] MB:S:SOCKET:HOST_GENERATE_TASKS (AI)
 socket.on("host-generate-tasks", async (payload, cb) => {
   try{
     const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").toUpperCase().trim();
@@ -1406,7 +1677,10 @@ socket.on("host-generate-tasks", async (payload, cb) => {
   }
 });
 
-  socket.on("host-task-update", (payload, cb) => {
+  
+
+  // [ANCHOR] MB:S:SOCKET:HOST_TASK_UPDATE (starts/updates collect)
+socket.on("host-task-update", (payload, cb) => {
     try {
       const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").trim().toUpperCase();
       const room = getRoom(roomCode);
@@ -1415,7 +1689,8 @@ socket.on("host-generate-tasks", async (payload, cb) => {
 
       room.roundNumber = Number(payload?.roundNumber || 1);
       room.task = String(payload?.task || "");
-      logAdmin("round_task", { roomCode, roundNumber: room.roundNumber, task: String(room.task||"").slice(0, 140) });
+      logAdmin("round_task", { roomCode, roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds, task: String(room.task||"").slice(0, 140) });
       room.phase = "collect";
       clearVoteTimer(room);
       room.voteStartAt = 0;
@@ -1425,13 +1700,18 @@ socket.on("host-generate-tasks", async (payload, cb) => {
       room.locked = true;
       room.memesRevealed = false;
       room.memes = [];
-      Object.values(room.playersById).forEach(p => { p.hasMeme = false; p.hasVoted = false; });
+      Object.values(room.playersById).forEach(p => { p.hasMeme = false; p.hasVoted = false; p.missedVote = false; p.readyNext = false; });
       room.updatedAt = Date.now();
 
       clearRoomTimer(room, "collect"); clearRoomTimer(room, "vote");
       scheduleCollectTimer(room, payload?.countdownSeconds ?? room.collectSeconds ?? ROUND_SECONDS_DEFAULT);
 
-      io.to(room.code).emit("round-task", { roomCode: room.code, roundNumber: room.roundNumber, task: room.task, countdownSeconds: room.collectSeconds });
+      tlPush(room, "round-task", { roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds, task: String(room.task||"").slice(0, 140), countdownSeconds: room.collectSeconds });
+      emitDebugState(room);
+
+      io.to(room.code).emit("round-task", { roomCode: room.code, roundNumber: room.roundNumber,
+    totalRounds: room.totalRounds, task: room.task, countdownSeconds: room.collectSeconds });
       cbOk(cb);
       broadcast(room);
     } catch {
@@ -1439,7 +1719,10 @@ socket.on("host-generate-tasks", async (payload, cb) => {
     }
   });
 
-  socket.on("host-start-vote", (payload, cb) => {
+  
+
+  // [ANCHOR] MB:S:SOCKET:HOST_START_VOTE
+socket.on("host-start-vote", (payload, cb) => {
     try{
       const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").trim().toUpperCase();
       const room = getRoom(roomCode);
@@ -1456,6 +1739,9 @@ socket.on("host-generate-tasks", async (payload, cb) => {
 
 
 
+
+
+  // [ANCHOR] MB:S:SOCKET:HOST_FORCE_FINISH_VOTE (failsafe)
 socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
   const room = getRoom(roomCode);
   if (!room) return cb?.({ ok: false, error: "room_not_found" });
@@ -1465,11 +1751,16 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
     return cb?.({ ok: false, error: "not_in_vote" });
   }
 
+  tlPush(room, "host-force-finish-vote", { reason: String(reason || "host_force") });
   finalizeVoting(room, reason || "host_force");
+  emitDebugState(room);
   cb?.({ ok: true });
 });
 
-  socket.on("player-join", (payload, cb) => {
+  
+
+  // [ANCHOR] MB:S:SOCKET:PLAYER_JOIN
+socket.on("player-join", (payload, cb) => {
     try {
       const roomCode = String(payload?.roomCode || "").trim().toUpperCase();
       const nicknameRaw = String(payload?.nickname || "").trim().slice(0, 24);
@@ -1493,11 +1784,29 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
         if (p) {
           p.connected = true;
           p.lastSeen = Date.now();
+          // Backward compatibility for old player objects
+          if (typeof p.readyNext !== "boolean") p.readyNext = false;
+          if (typeof p.missedVote !== "boolean") p.missedVote = false;
           room.socketToPlayerId[socket.id] = pid;
           socket.join(roomCode);
           socket.data.roomCode = roomCode;
           socket.data.role = "player";
-          cbOk(cb, { rejoined: true, playerId: pid, roomCode, nickname: p.nickname, phase: room.phase, roundNumber: room.roundNumber, task: room.task });
+          cbOk(cb, {
+            rejoined: true,
+            playerId: pid,
+            roomCode,
+            nickname: p.nickname,
+            // lightweight room snapshot (so player timer works even if first room-status is missed)
+            phase: room.phase,
+            roundNumber: room.roundNumber,
+            totalRounds: room.totalRounds,
+            task: room.task,
+            collectEndsAt: room.collectEndsAt || null,
+            voteEndsAt: room.voteEndsAt || null,
+            collectSeconds: room.collectSeconds || null,
+            voteSeconds: room.voteSeconds || null,
+            serverNow: Date.now(),
+          });
           incTotal("playerJoins", 1);
           logAdmin("player_join", { roomCode, nickname: p.nickname, playerId: pid, rejoined: true });
           broadcast(room);
@@ -1514,6 +1823,8 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
         lastSeen: Date.now(),
         hasMeme: false,
         hasVoted: false,
+        missedVote: false,
+        readyNext: false,
         score: 0,
       };
       room.nickIndex[nn] = pid;
@@ -1523,7 +1834,22 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
       socket.data.roomCode = roomCode;
       socket.data.role = "player";
 
-      cbOk(cb, { rejoined: false, playerId: pid, roomCode, nickname: nicknameRaw, phase: room.phase, roundNumber: room.roundNumber, task: room.task });
+      cbOk(cb, {
+        rejoined: false,
+        playerId: pid,
+        roomCode,
+        nickname: nicknameRaw,
+        // lightweight room snapshot (so player timer works even if first room-status is missed)
+        phase: room.phase,
+        roundNumber: room.roundNumber,
+        totalRounds: room.totalRounds,
+        task: room.task,
+        collectEndsAt: room.collectEndsAt || null,
+        voteEndsAt: room.voteEndsAt || null,
+        collectSeconds: room.collectSeconds || null,
+        voteSeconds: room.voteSeconds || null,
+        serverNow: Date.now(),
+      });
       incTotal("playerJoins", 1);
       logAdmin("player_join", { roomCode, nickname: nicknameRaw, playerId: pid, rejoined: false });
       broadcast(room);
@@ -1532,7 +1858,10 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
     }
   });
 
-  socket.on("player-send-meme", (payload, cb) => {
+  
+
+  // [ANCHOR] MB:S:SOCKET:PLAYER_SEND_MEME
+socket.on("player-send-meme", (payload, cb) => {
     try {
       const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").trim().toUpperCase();
       const room = getRoom(roomCode);
@@ -1541,22 +1870,28 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
 
       const p = getPlayer(room, socket);
       if (!p) return cbErr(cb, "E_NOT_IN_ROOM", "Вы не в комнате");
-
       let url = String(payload?.url || "").trim();
-    // Normalize TikTok share links to embed URLs (fast, no network)
-    url = toTikTokEmbedFast(url);
-      const caption = String(payload?.caption || "").trim().slice(0, 140);
+      // Normalize TikTok share links to embed URLs (fast, no network)
+      url = toTikTokEmbedFast(url);
+
+      // Text-only meme support: when no url/file is provided, allow plain text
+      const text = String(payload?.text || "").trim().slice(0, 700);
+      const isTextOnly = !url && !!text;
+
+      // Caption is only for url/file memes (no comments for text-only)
+      const caption = isTextOnly ? "" : String(payload?.caption || "").trim().slice(0, 140);
 
       const meta = payload?.meta || {};
       const mediaKindRaw = String(meta.kind || meta.mediaKind || meta.mediaType || payload?.mediaKind || payload?.mediaType || "").toLowerCase();
-      const mediaKind = ["photo","gif","video","audio"].includes(mediaKindRaw) ? mediaKindRaw : null;
+      const mediaKind = isTextOnly ? "text" : (["photo","gif","video","audio"].includes(mediaKindRaw) ? mediaKindRaw : null);
+
       let durationSec = Number(meta.durationSec ?? meta.duration ?? payload?.durationSec ?? payload?.duration ?? NaN);
       if (!Number.isFinite(durationSec) || durationSec <= 0) durationSec = null;
       if (durationSec != null) {
         durationSec = Math.min(durationSec, 60 * 60); // sanity cap
         durationSec = Math.round(durationSec * 100) / 100;
       }
-      if (!url) return cbErr(cb, "E_BAD_DATA", "Нужна ссылка или файл");
+      if (!url && !text) return cbErr(cb, "E_BAD_DATA", "Нужна ссылка, файл или текст");
 
       room.locked = true;
 
@@ -1564,6 +1899,7 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
       const memeObj = {
         id: idx >= 0 ? room.memes[idx].id : `${Date.now()}_${Math.random().toString(16).slice(2)}`,
         url,
+        text: isTextOnly ? text : "",
         caption,
         submittedAt: idx >= 0 ? (room.memes[idx].submittedAt || Date.now()) : Date.now(),
         ownerId: p.id,
@@ -1592,7 +1928,10 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
     }
   });
 
-  socket.on("player-vote", (payload, cb) => {
+  
+
+  // [ANCHOR] MB:S:SOCKET:PLAYER_VOTE
+socket.on("player-vote", (payload, cb) => {
     try {
       const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").trim().toUpperCase();
       const memeId = String(payload?.memeId || "").trim();
@@ -1614,13 +1953,16 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
       logAdmin("vote", { roomCode, voter: p.nickname, memeId, ownerId: meme.ownerId });
       p.hasVoted = true;
       room.updatedAt = Date.now();
-
+      tlPush(room, "player-vote", { voter: p.nickname, memeId, ownerId: meme.ownerId });
 
       // If everyone voted — emit a clear "voting finished" signal
       maybeFinishVoting(room);
 
       cbOk(cb);
-      broadcast(room);
+      // [ANCHOR] MB:S:SOCKET:PLAYER_VOTE:SOFT_BROADCAST — avoid room-wide re-render/blink on every vote
+      // Variant 1: realtime voted X/Y only for HOST, no spam to all players.
+      if (room.hostId) emitRoomStatusTo(room, room.hostId);
+      else broadcast(room);
     } catch {
       cbErr(cb, "E_VOTE", "Ошибка голосования");
     }
@@ -1628,6 +1970,9 @@ socket.on("host-force-finish-vote", ({ roomCode, reason }, cb) => {
 
 
   
+
+
+  // [ANCHOR] MB:S:SOCKET:PLAYER_READY_NEXT
 socket.on("player-ready-next", ({ roomCode }, cb) => {
   try {
     const room = getRoom(roomCode);
@@ -1636,13 +1981,19 @@ socket.on("player-ready-next", ({ roomCode }, cb) => {
     const player = getPlayer(room, socket);
     if (!player) return cb?.({ ok: false, error: "player_not_found" });
 
-    if (room.phase !== "vote" || !room.voteComplete) {
-      return cb?.({ ok: false, error: "vote_not_complete" });
+    // Can be pressed as soon as the player voted (even while voting is still running).
+    if (room.phase !== "vote") return cb?.({ ok: false, error: "not_in_vote_phase" });
+    if (!player.hasVoted || player.missedVote) return cb?.({ ok: false, error: "not_voted" });
+
+    if (!player.readyNext) {
+      player.readyNext = true;
+      room.updatedAt = Date.now();
+      tlPush(room, "player-ready-next", { playerId: player.id, nickname: player.nickname });
     }
 
-    player.readyNext = true;
-    room.updatedAt = Date.now();
     broadcast(room);
+
+    // Auto-advance check only matters after voteComplete=true (winner determined).
     maybeEmitAllReadyNext(room);
 
     cb?.({ ok: true });
@@ -1652,7 +2003,10 @@ socket.on("player-ready-next", ({ roomCode }, cb) => {
 });
 
 
-  socket.on("host-final-results", (payload, cb) => {
+  
+
+  // [ANCHOR] MB:S:SOCKET:HOST_FINAL_RESULTS
+socket.on("host-final-results", (payload, cb) => {
     try {
       const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").trim().toUpperCase();
       const room = getRoom(roomCode);
@@ -1679,7 +2033,10 @@ socket.on("player-ready-next", ({ roomCode }, cb) => {
     }
   });
 
-  socket.on("host-new-game", (payload, cb) => {
+  
+
+  // [ANCHOR] MB:S:SOCKET:HOST_NEW_GAME
+socket.on("host-new-game", (payload, cb) => {
     try {
       const roomCode = String(payload?.roomCode || socket.data?.roomCode || "").trim().toUpperCase();
       const room = getRoom(roomCode);

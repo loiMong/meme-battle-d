@@ -1,10 +1,34 @@
 /* Meme Battle фронт (анонимность мемов на экране хоста до reveal/голосования) */
 
+/* =====================================================================
+   [MB-ANCHORS] Frontend quick map (поиск по файлу)
+   - [ANCHOR] MB:F:AI
+   - [ANCHOR] MB:F:MEDIA
+   - [ANCHOR] MB:F:SCREENS
+   - [ANCHOR] MB:F:DEBUG
+   - [ANCHOR] MB:F:HOST_SETUP
+   - [ANCHOR] MB:F:HOST_ROUND
+   - [ANCHOR] MB:F:HOST_VOTING
+   - [ANCHOR] MB:F:WINNER_OVERLAY
+   - [ANCHOR] MB:F:PLAYER
+   - [ANCHOR] MB:F:ADMIN
+   - [ANCHOR] MB:F:SOCKET:ROOM_STATUS / ROUND_TASK / VOTING_*
+   ===================================================================== */
+
+
 const SERVER_URL = window.location.origin;
+
+
+// [ANCHOR] MB:F:DEBUG_TOGGLE — single switch for client-side debug logs/panel
+// Set DEBUG=false to disable pushDebug() noise.
+let DEBUG = true;
+
 
 // TikTok calibration video (used in Admin mode preview)
 const CALIBRATION_TIKTOK_URL = "https://www.tiktok.com/@prokendol112/video/7508817190636752146?is_from_webapp=1&sender_device=pc&web_id=7584888569203066390";
 
+
+// [ANCHOR] MB:F:AI — generation UI + state
 // === AI tasks presets ===
 const AI_PRESET_THEMES = [
   "Anime", "Movies", "Games", "Office", "Pets", "Food",
@@ -28,6 +52,17 @@ let aiState = {
 
 const $ = (id) => document.getElementById(id);
 
+// [ANCHOR] MB:F:DOM:DELEGATE — event delegation helpers (фикс кликов для элементов, которые идут после <script>)
+function delegateClick(selector, handler){
+  document.addEventListener("click", (ev) => {
+    const t = ev.target;
+    if(!t || !t.closest) return;
+    const el = t.closest(selector);
+    if(!el) return;
+    try{ handler(ev, el); }catch(e){}
+  });
+}
+
 // Small helper for +/- buttons around range inputs
 function nudgeRange(id, delta, min, max){
   const el = $(id);
@@ -40,6 +75,8 @@ function nudgeRange(id, delta, min, max){
 
 
 
+
+// [ANCHOR] MB:F:MEDIA — detect/render YouTube/TikTok/images/video
 /* === Media helpers: render without cropping; different approach for YT vs TikTok === */
 function detectMediaType(url){
   const u = String(url || "").trim();
@@ -196,12 +233,73 @@ function dbgValueShort(v){
   return { kind: "url", len: s.length, head: s.slice(0, 200) + (s.length > 200 ? "..." : "") };
 }
 
+function escapeHtml(s){
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+// [ANCHOR] MB:F:RENDER_MEME_HTML — supports text-only memes
+function renderMemeHTML(m){
+  try{
+    if(m && typeof m.text === 'string' && m.text.trim()){
+      const safe = escapeHtml(String(m.text)).replace(/\n/g,'<br>');
+      return `<div class="textMeme"><div class="textMemeInner">${safe}</div></div>`;
+    }
+  }catch(e){}
+  return renderMediaHTML(m && m.url ? m.url : '');
+}
+
+
 // ===== Debug log store (so you can copy diagnostics) =====
 const DBG_MAX = 400;
 window.__MB_DBG = window.__MB_DBG || [];
 
+// [ANCHOR] MB:F:DEBUG_TIMELINE — server timeline (host)
+let serverTimeline = [];
+function renderServerTimeline(){
+  const box = $("debug-timeline");
+  if(!box) return;
+  box.innerHTML = "";
+  const items = Array.isArray(serverTimeline) ? serverTimeline : [];
+  items.slice(0, 120).forEach(e=>{
+    const row = document.createElement("div");
+    row.className = "debugTLRow";
+    const t = e?.ts ? String(e.ts).slice(11,19) : now();
+    const tag = e?.tag ? String(e.tag) : "evt";
+    const det = (e && (e.detail !== undefined)) ? e.detail : null;
+    row.innerHTML = `<span class="t">[${t}]</span> <b>${tag}</b> <span>${det ? safeJson(det) : ""}</span>`;
+    box.appendChild(row);
+  });
+}
+
+function setDebugEnabled(v){
+  DEBUG = !!v;
+  try{ localStorage.setItem("MB_DEBUG", DEBUG ? "1" : "0"); }catch(e){}
+  const cb = $("debug-enabled");
+  if(cb) cb.checked = !!DEBUG;
+}
+
+function getStoredDebugEnabled(){
+  try{
+    const v = localStorage.getItem("MB_DEBUG");
+    if(v === null) return true;
+    return v === "1" || v === "true" || v === "on";
+  }catch(e){
+    return true;
+  }
+}
+
+
+
+
+// [ANCHOR] MB:F:DEBUG — client-side log + report-to-server
 function pushDebug(tag, detail){
-  const entry = {
+    if(!DEBUG) return;
+const entry = {
     ts: new Date().toISOString(),
     t: now(),
     tag: String(tag),
@@ -217,6 +315,10 @@ function pushDebug(tag, detail){
   row.className = "dbg";
   row.innerHTML = `<span class="t">[${now()}]</span> <b>${tag}</b> <span class="d">${typeof detail === "string" ? detail : safeJson(detail)}</span>`;
   body.prepend(row);
+
+  // Bound DOM list size to keep mobile from choking
+  const DOM_MAX = 200;
+  while (body.children.length > DOM_MAX) body.removeChild(body.lastChild);
 }
 
 function getDebugDump(){
@@ -228,10 +330,99 @@ function getDebugDump(){
     inIframe: window.self !== window.top,
     viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio },
   };
-  return {
-    env,
-    logs: Array.isArray(window.__MB_DBG) ? window.__MB_DBG.slice(0, DBG_MAX) : []
-  };
+
+  const logs = Array.isArray(window.__MB_DBG) ? window.__MB_DBG.slice(0, DBG_MAX) : [];
+
+  let state = {};
+  try{
+    const socketConnected = !!(window.socket && window.socket.connected);
+    const last = (typeof lastRoomStatus !== "undefined") ? lastRoomStatus : null;
+
+    const timerEl = (typeof getPlayerTimerEl === "function") ? getPlayerTimerEl() : null;
+    const timerRect = timerEl ? timerEl.getBoundingClientRect() : null;
+    const timerCS = timerEl ? window.getComputedStyle(timerEl) : null;
+
+    const pts = (typeof playerTimerState !== "undefined") ? playerTimerState : null;
+
+    let playerTimerSec = null;
+    try{
+      if(pts && pts.endsAt){
+        const alignedNow = (typeof playerTimerAlignedNow === "function")
+          ? playerTimerAlignedNow()
+          : (Date.now() - (Number(pts.serverOffsetMs)||0));
+        playerTimerSec = Math.max(0, Math.ceil((Number(pts.endsAt) - alignedNow)/1000));
+      }
+    }catch(e){}
+
+    state = {
+      version: window.__MB_VERSION || null,
+      screen: (typeof currentScreenName !== "undefined") ? currentScreenName : null,
+      socket: {
+        connected: socketConnected,
+        id: (window.socket && window.socket.id) ? window.socket.id : null,
+      },
+      player: {
+        joined: !!(window.playerState && playerState.joined),
+        roomCode: (window.playerState && playerState.roomCode) || null,
+        nickname: (window.playerState && playerState.nickname) || null,
+        id: (window.playerState && (playerState.playerId || playerState.id)) || null,
+        meVoted: !!(window.playerState && playerState.hasVotedLocal),
+        readyNext: !!(window.playerState && playerState.readyNextLocal),
+      },
+      host: {
+        joined: !!(window.hostState && hostState.joined),
+        roomCode: (window.hostState && hostState.roomCode) || null,
+        id: (window.hostState && hostState.id) || null,
+        started: !!(window.hostState && hostState.started),
+        roundNumber: (window.hostState && hostState.roundNumber) || null,
+      },
+      room: last ? {
+        roomCode: last.roomCode,
+        phase: last.phase,
+        roundNumber: last.roundNumber,
+        totalRounds: last.totalRounds,
+        task: last.task,
+        collectEndsAt: last.collectEndsAt,
+        voteEndsAt: last.voteEndsAt,
+        serverNow: last.serverNow,
+        memesCount: last.memesCount,
+        playersCount: last.playersCount,
+      } : null,
+      playerTimer: {
+        hasEl: !!timerEl,
+        inDom: timerEl ? document.body.contains(timerEl) : null,
+        id: timerEl ? (timerEl.id || null) : null,
+        hidden: timerEl ? timerEl.classList.contains("hidden") : null,
+        text: timerEl ? timerEl.textContent : null,
+        classes: timerEl ? Array.from(timerEl.classList) : null,
+        rect: timerRect ? { x: timerRect.x, y: timerRect.y, w: timerRect.width, h: timerRect.height } : null,
+        css: timerCS ? {
+          display: timerCS.display,
+          visibility: timerCS.visibility,
+          opacity: timerCS.opacity,
+          position: timerCS.position,
+          top: timerCS.top,
+          left: timerCS.left,
+          zIndex: timerCS.zIndex,
+          transform: timerCS.transform,
+        } : null,
+        state: pts ? {
+          active: !!pts.active,
+          phase: pts.phase,
+          endsAt: pts.endsAt,
+          offsetMs: pts.serverOffsetMs,
+          tick: !!pts.tickHandle,
+          lastSec: pts.lastSec,
+          secComputed: playerTimerSec,
+          lastSig: pts.lastSig,
+        } : null,
+      },
+    };
+  }catch(e){
+    state = { error: String((e && e.message) || e) };
+  }
+
+  return { env, state, logs };
 }
 
 async function copyDebugToClipboard(){
@@ -243,6 +434,33 @@ async function copyDebugToClipboard(){
   }catch(e){
     pushDebug("debug", { copyError: String(e) });
     alert("Не удалось скопировать (возможно, запрет браузера). Открой DEBUG и скопируй вручную.");
+  }
+}
+
+function downloadDebugFile(){
+  try{
+    const dump = getDebugDump();
+    const json = JSON.stringify(dump, null, 2);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+
+    const room = (dump?.state?.room?.roomCode || dump?.state?.roomCode || "").toString().trim() || "NO_ROOM";
+    const ts = new Date().toISOString().replaceAll(":", "-");
+    const fname = `meme-battle_debug_${room}_${ts}.json`;
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try{ URL.revokeObjectURL(a.href); }catch(e){}
+      try{ a.remove(); }catch(e){}
+    }, 0);
+
+    pushDebug("debug", { downloaded: fname, bytes: json.length });
+  }catch(e){
+    pushDebug("debug", { downloadError: String(e) });
+    alert("Не удалось скачать debug JSON");
   }
 }
 
@@ -641,7 +859,11 @@ function setDebug(open){ $("debug-panel")?.classList.toggle("hidden", !open); }
 $("debug-toggle")?.addEventListener("click", () => setDebug($("debug-panel")?.classList.contains("hidden")));
 $("debug-close")?.addEventListener("click", () => setDebug(false));
 $("debug-copy")?.addEventListener("click", () => copyDebugToClipboard());
+$("debug-download")?.addEventListener("click", () => downloadDebugFile());
 $("debug-clear")?.addEventListener("click", () => clearDebug());
+
+// [ANCHOR] MB:DEBUG:init
+try{ setDebugEnabled(getStoredDebugEnabled()); }catch(e){}
 
 function setSettings(open){ $("settings-panel")?.classList.toggle("hidden", !open); }
 $("settings-toggle")?.addEventListener("click", () => setSettings($("settings-panel")?.classList.contains("hidden")));
@@ -675,11 +897,14 @@ setTimeout(() => {
   try{ applyTTVars("init:delayed"); }catch(e){}
 }, 0);
 
+
+// [ANCHOR] MB:F:SCREENS — mode/host/player/admin navigation
 // -------- Screen switching
 const screens = ["mode","host","player","admin"].reduce((acc,k)=>{
   acc[k] = $(`screen-${k}`);
   return acc;
 }, {});
+let currentScreenName = "mode"; // [ANCHOR] MB:STATE:CURRENT_SCREEN
 function setHostView(view){
   const setup = $("host-view-setup");
   const round = $("host-view-round");
@@ -837,6 +1062,8 @@ function hostRoundStopTimer(){
   }
 }
 
+
+// [ANCHOR] MB:F:HOST_ROUND:TIMER
 function hostRoundStartTimer(seconds){
   hostRoundStopTimer();
   hostRoundState.secondsTotal = Math.max(5, Number(seconds)||60);
@@ -895,6 +1122,8 @@ function hostRoundUpdateProgress(st){
   }
 }
 
+
+// [ANCHOR] MB:F:HOST_VOTING — masonry + timer + autoscroll
 // -------- HOST voting view (fixed timer + masonry + auto-scroll)
 const HOST_VOTE_SECONDS_DEFAULT = 30;
 let hostVoteState = {
@@ -966,6 +1195,7 @@ function hostVoteStartTimer(secondsTotal){
     }
 
 
+    // [BUGWATCH] Если таймер дошёл до 00:00, а voteComplete не приходит — шлём host-force-finish-vote.
     // Detect classic bug: UI shows 00:00 but server doesn't finish vote (missing endsAt/timer)
     try{
       const inVoting = (typeof hostView !== "undefined" && hostView === "voting");
@@ -1237,6 +1467,8 @@ function hostVoteStop(){
 
 
 function showScreen(name){
+  currentScreenName = name;
+  try{ document.body.classList.toggle("is-role-selection", name === "mode"); }catch(e){}
   Object.entries(screens).forEach(([k,el])=>{
     if(!el) return;
     el.classList.toggle("hidden", k !== name);
@@ -1246,10 +1478,17 @@ function showScreen(name){
   if(sb) sb.classList.toggle("hidden", name === "mode");
   if(name === "mode") { try{ setSettings(false); }catch(e){} }
   if(name === "host") { try{ setHostView("setup"); }catch(e){} }
+  try{ playerTimerUpdate(true); }catch(e){}
   pushDebug("screen", name);
 }
 $("btn-mode-host")?.addEventListener("click", () => showScreen("host"));
 $("btn-mode-player")?.addEventListener("click", () => showScreen("player"));
+$("btn-fullscreen")?.addEventListener("click", () => {
+  try{
+    if(!document.fullscreenElement){ document.documentElement.requestFullscreen(); }
+    else{ document.exitFullscreen(); }
+  }catch(error){ console.log("Fullscreen not available:", error); }
+});
 $("btn-mode-admin")?.addEventListener("click", () => showScreen("admin"));
 
 // -------- Socket
@@ -1274,12 +1513,66 @@ function dbgReport(tag, detail){
 }
 
 // Server timer diagnostics (schedule/fire/clear/watchdog)
+
+// [ANCHOR] MB:F:SOCKET:TIMER_DEBUG
 socket.on("timer-debug", (p) => {
   try{
     const action = p?.action ? String(p.action) : "timer";
     pushDebug(`timer:${action}`, p);
   }catch(e){}
 });
+
+
+// [ANCHOR] MB:F:DEBUG_ROOM_SYNC — unified DEBUG toggle + room timeline tools (host)
+function canRoomDebug(){
+  return screens?.host && !screens.host.classList.contains("hidden") && !!currentRoom;
+}
+function requestDebugSnapshot(){
+  if(!canRoomDebug()) return;
+  socket.emit("host-debug-snapshot", { roomCode: currentRoom }, (res)=> pushDebug("host-debug-snapshot", res));
+}
+function setRoomDebugEnabled(enabled){
+  if(!canRoomDebug()) return;
+  socket.emit("host-debug-set", { roomCode: currentRoom, enabled: !!enabled }, (res)=> pushDebug("host-debug-set", res));
+}
+function clearRoomTimeline(){
+  if(!canRoomDebug()) return;
+  socket.emit("host-debug-clear", { roomCode: currentRoom }, (res)=> pushDebug("host-debug-clear", res));
+}
+
+// UI buttons
+$("debug-enabled")?.addEventListener("change", (e)=>{
+  const v = !!e?.target?.checked;
+  setDebugEnabled(v);
+  if(canRoomDebug()) setRoomDebugEnabled(v);
+});
+$("debug-snapshot")?.addEventListener("click", ()=> requestDebugSnapshot());
+$("debug-tl-clear")?.addEventListener("click", ()=> clearRoomTimeline());
+
+// Server signals
+socket.on("debug-state", (p)=>{
+  try{
+    const t = $("debug-room-state");
+    if(t) t.textContent = `Room debug: ${p?.debugEnabled ? "ON" : "OFF"} · TL: ${Number(p?.timelineSize||0)}`;
+  }catch(e){}
+});
+socket.on("debug-snapshot", (p)=>{
+  try{
+    serverTimeline = Array.isArray(p?.timeline) ? p.timeline : [];
+    const t = $("debug-room-state");
+    if(t) t.textContent = `Room debug: ${p?.debugEnabled ? "ON" : "OFF"} · TL: ${serverTimeline.length}`;
+    renderServerTimeline();
+  }catch(e){}
+});
+socket.on("debug-timeline", (entry)=>{
+  try{
+    if(!entry) return;
+    serverTimeline.unshift(entry);
+    if(serverTimeline.length > 320) serverTimeline.length = 320;
+    renderServerTimeline();
+  }catch(e){}
+});
+
 
 
 if (typeof io !== "function"){
@@ -1295,6 +1588,8 @@ function setPill(id, ok){
   el.classList.toggle("bad", !ok);
 }
 
+
+// [ANCHOR] MB:F:SOCKET:CONNECT
 socket.on("connect", () => {
   pushDebug("socket", { event:"connect", id: socket.id });
   setPill("host-conn", true);
@@ -1309,6 +1604,8 @@ socket.on("connect", () => {
     joinRoom(room, nick, true);
   }
 });
+
+// [ANCHOR] MB:F:SOCKET:DISCONNECT
 socket.on("disconnect", (r) => {
   pushDebug("socket", { event:"disconnect", reason: r });
   setPill("host-conn", false);
@@ -1320,54 +1617,331 @@ socket.on("disconnect", (r) => {
 // -------- Shared state
 let currentRoom = "";
 let hostState = { totalRounds: 5, tasks: [], round: 0, scores: {} };
-let playerState = { joined: false, playerId: "", nickname: "", roomCode: "" };
+let playerState = { joined: false, playerId: "", nickname: "", roomCode: "", hasVotedLocal: false, readyNextLocal: false };
+// [ANCHOR] MB:F:PLAYER_SCORE_STATE — last known score for debug + UI sync
+let playerLastScore = null;
 let lastRoomStatus = null;
 let nextUiDelayDone = false;
 let nextUiRoundNumber = 0;
 let hostAutoNextLock = false;
 
+// [ANCHOR] MB:F:PLAYER_TIMER — yellow pill timer on player submit screen
+let playerTimerState = {
+  active: false,
+  phase: "",
+  endsAt: 0,
+  serverOffsetMs: 0,
+  tickHandle: null,
+  lastSec: null,
+  lastSig: ""
+};
+
+function getPlayerTimerEl(){
+  return document.getElementById("player-round-timer") ||
+         document.getElementById("pTimerPill") ||
+         document.getElementById("player-timer");
+}
+
+function isPlayerScreenVisible(){
+  try{ return screens.player && !screens.player.classList.contains("hidden"); }catch(e){ return false; }
+}
+
+function playerTimerAlignedNow(){
+  return Date.now() - (Number(playerTimerState.serverOffsetMs) || 0);
+}
+
+function playerTimerStop(reason){
+  const wasActive = !!playerTimerState.active || !!playerTimerState.tickHandle;
+  try{ if(playerTimerState.tickHandle){ clearInterval(playerTimerState.tickHandle); } }catch(e){}
+  playerTimerState.tickHandle = null;
+  playerTimerState.active = false;
+  playerTimerState.phase = "";
+  playerTimerState.endsAt = 0;
+  playerTimerState.lastSec = null;
+  const el = getPlayerTimerEl();
+  if(el) el.classList.add("hidden");
+  if(wasActive && reason){ pushDebug("playerTimer:stop", { reason }); }
+}
+
+function playerTimerUpdate(force){
+  const el = getPlayerTimerEl();
+  if(!el){
+    if(force) pushDebug("playerTimer:missing_el", {});
+    return;
+  }
+  if(!isPlayerScreenVisible()){
+    el.classList.add("hidden");
+    return;
+  }
+  const endsAt = Number(playerTimerState.endsAt || 0);
+  if(!endsAt){
+    el.classList.add("hidden");
+    return;
+  }
+  const leftMs = endsAt - playerTimerAlignedNow();
+  let sec = Math.ceil(leftMs/1000);
+  if(!Number.isFinite(sec)) sec = 0;
+  sec = Math.max(0, sec);
+
+  if(!force && sec === playerTimerState.lastSec) return;
+  playerTimerState.lastSec = sec;
+
+  el.textContent = String(sec);
+  el.classList.remove("ok","warn","crit","bounce");
+  if(sec <= 10) el.classList.add("crit");
+  else if(sec <= 20) el.classList.add("warn");
+  else el.classList.add("ok");
+
+  el.classList.toggle("hidden", sec <= 0);
+
+  // bounce each tick when <=10
+  if(sec <= 10 && sec > 0){
+    el.classList.remove("bounce");
+    void el.offsetWidth;
+    el.classList.add("bounce");
+  }
+}
+
+function playerTimerStart(){
+  if(playerTimerState.tickHandle) return;
+  playerTimerState.tickHandle = setInterval(()=>playerTimerUpdate(false), 1000);
+}
+
+function playerTimerSyncFromStatus(st){
+  try{
+    if(!st) return;
+    if(!playerState.joined) return;
+    if(st.roomCode && playerState.roomCode && String(st.roomCode) !== String(playerState.roomCode)) return;
+
+    const phase = String(st.phase || "");
+    const serverNow = Number(st.serverNow || 0);
+    if(serverNow > 0){
+      playerTimerState.serverOffsetMs = Date.now() - serverNow;
+    }
+
+    const collectEndsAt = Number(st.collectEndsAt || 0);
+    const sig = `${phase}|${st.roundNumber||0}|${collectEndsAt}|${serverNow}`;
+    if(sig !== playerTimerState.lastSig){
+      playerTimerState.lastSig = sig;
+      pushDebug("playerTimer:status", {
+        phase,
+        roundNumber: st.roundNumber,
+        collectEndsAt,
+        serverNow,
+        offsetMs: playerTimerState.serverOffsetMs
+      });
+    }
+
+    if(phase === "collect" && collectEndsAt > 0){
+      playerTimerState.active = true;
+      playerTimerState.phase = phase;
+      playerTimerState.endsAt = collectEndsAt;
+      const el = getPlayerTimerEl();
+      if(el) el.classList.remove("hidden");
+      playerTimerUpdate(true);
+      playerTimerStart();
+    } else {
+      playerTimerStop(`phase:${phase || "?"}`);
+    }
+  }catch(e){
+    pushDebug("playerTimer:error", { msg: String((e && e.message) || e) });
+  }
+}
+
+window.__mbPlayerTimerState = playerTimerState;
+
+function getMandatoryReadyStats(st){
+  const players = Array.isArray(st?.players) ? st.players : [];
+  const mandatory = players.filter(p => p && p.connected && p.hasVoted);
+  const total = mandatory.length;
+  const ready = mandatory.filter(p => !!p.readyNext).length;
+  return { mandatory, total, ready };
+}
+
+
+// [ANCHOR] MB:F:HOST_MINI_STATUS — voted/ready/missed shown on host voting + winner
+function updateHostMiniStatus(st){
+  const isHost = screens?.host && !screens.host.classList.contains("hidden");
+  if(!isHost) return;
+
+  const players = Array.isArray(st?.players) ? st.players : [];
+  const connected = players.filter(p => p && p.connected);
+  const voted = connected.filter(p => !!p.hasVoted);
+  const missed = connected.filter(p => !!p.missedVote);
+  const mandatory = connected.filter(p => !!p.hasVoted);
+  const ready = mandatory.filter(p => !!p.readyNext);
+
+  // Host voting HUD
+  const stats = $("host-vote-mini-stats");
+  const list = $("host-vote-mini-list");
+  const btnForce = $("host-vote-force-next");
+
+  if(st?.phase === "vote"){
+    if(stats){
+      if(mandatory.length <= 0){
+        stats.textContent = st.voteComplete
+          ? "0 проголосовавших — авто-переход OFF (только хост)"
+          : `Проголосовало: 0 / ${connected.length}`;
+      } else {
+        stats.textContent = `Voted ${voted.length}/${connected.length} · Ready ${ready.length}/${mandatory.length} · Missed ${missed.length}`;
+      }
+    }
+    if(btnForce){
+      // Emergency next round only after winner exists (voteComplete)
+      btnForce.disabled = !st.voteComplete;
+    }
+    if(list){
+      list.innerHTML = "";
+      players.forEach(p=>{
+        const tags = [];
+        if(!p.connected) tags.push("📡");
+        if(p.hasVoted) tags.push("🗳️");
+        if(p.readyNext) tags.push("✅");
+        if(p.missedVote) tags.push("💤");
+        const el = document.createElement("div");
+        el.className = "hostVoteMiniItem";
+        el.textContent = `${p.nickname} ${tags.join("")}`;
+        list.appendChild(el);
+      });
+    }
+  } else {
+    if(stats) stats.textContent = "";
+    if(list) list.innerHTML = "";
+    if(btnForce) btnForce.disabled = true;
+  }
+
+  // Winner overlay host controls (counts only)
+  const wstats = $("winner-host-mini-stats");
+  if(wstats){
+    wstats.textContent = mandatory.length > 0
+      ? `Ready ${ready.length}/${mandatory.length} · Missed ${missed.length}`
+      : `0 проголосовавших`;
+  }
+}
+
+
 function updateNextRoundUI() {
   const st = lastRoomStatus;
+
+  // Host: show readiness after voteComplete (phase-agnostic for compatibility)
   const hostReady = $("host-ready-next");
   if (hostReady) {
     if (st && st.voteComplete) {
-      const connected = (st.players || []).filter(p => p.connected);
-      const total = connected.length;
-      const ready = connected.filter(p => p.readyNext).length;
-      hostReady.textContent = `Готовы к следующему раунду: ${ready}/${total}`;
+      const { total, ready } = getMandatoryReadyStats(st);
+      hostReady.textContent = total > 0
+        ? `Готовы к следующему раунду (обязательные): ${ready}/${total}`
+        : `Никто не голосовал — авто-переход выключен (только хост)`;
       hostReady.classList.remove("hidden");
     } else {
       hostReady.classList.add("hidden");
     }
   }
 
+  // Player: next-round button must live inside Winner overlay (mobile-friendly).
+  const isPlayerScreen = !!(screens?.player && !screens.player.classList.contains("hidden"));
+  const ov = $("winner-overlay");
+  const overlayVisible = !!(ov && !ov.classList.contains("hidden"));
+
   const wrap = $("player-next-wrap");
   const btn = $("player-next-round");
   const wait = $("player-next-wait");
-  const isPlayerScreen = wrap && !screens.player.classList.contains("hidden");
+
+  const wWrap = $("winner-player-controls");
+  const wBtn = $("winner-player-next-round");
+  const wWait = $("winner-player-next-wait");
+
+  // voteComplete compatibility: older server versions could switch phase to "finished"
+  const voteDone = !!(st && (st.voteComplete || ["finished", "winner", "end"].includes(String(st.phase || ""))));
+
+  // We consider it "winner context" if overlay is open OR we've already received voting-finished.
+  const inWinnerContext = overlayVisible || (nextUiRoundNumber > 0);
+
+  const me = (st && Array.isArray(st.players))
+    ? st.players.find(p => p.id === playerState.playerId)
+    : null;
+
+  const meConnected = (me && typeof me.connected === "boolean") ? me.connected : true; // if missing -> assume true
+  const meVoted = (me && typeof me.hasVoted === "boolean") ? me.hasVoted : !!playerState.hasVotedLocal;
+  const meMissed = (me && typeof me.missedVote === "boolean") ? me.missedVote : false;
+  const meReady = (me && typeof me.readyNext === "boolean") ? me.readyNext : !!playerState.readyNextLocal;
+
+  const canSee = !!(
+    isPlayerScreen &&
+    voteDone &&
+    inWinnerContext &&
+    meConnected &&
+    meVoted &&
+    !meMissed
+  );
+
+  const { total, ready } = (st ? getMandatoryReadyStats(st) : { total: 0, ready: 0 });
+  const waitText = (!voteDone)
+    ? "Ожидание победителя…"
+    : (total > 0
+      ? `Ожидание игроков: ${ready}/${total} готовы`
+      : "Никто не голосовал — авто-переход выключен (только хост)");
+
+  // --- Winner overlay button (primary path)
+  if (wWrap && wBtn && wWait) {
+    if (!isPlayerScreen) {
+      wWrap.classList.add("hidden");
+    } else if (overlayVisible && canSee) {
+      wWrap.classList.remove("hidden");
+      wBtn.disabled = meReady;
+      wBtn.textContent = meReady ? "✅ Готов" : "Готов";
+      wWait.textContent = waitText;
+    } else {
+      wWrap.classList.add("hidden");
+      wBtn.disabled = false;
+      wBtn.textContent = "Готов";
+      wWait.textContent = "";
+    }
+  }
+
+  // --- Legacy button (fallback)
   if (wrap && btn && wait) {
-    if (isPlayerScreen && st && st.voteComplete && nextUiDelayDone) {
+    if (overlayVisible) {
+      // legacy will be under overlay; hide to avoid confusion
+      wrap.classList.add("hidden");
+      btn.disabled = false;
+      btn.textContent = "Готов";
+      wait.textContent = "";
+    } else if (canSee) {
       wrap.classList.remove("hidden");
-      const connected = (st.players || []).filter(p => p.connected);
-      const total = connected.length;
-      const ready = connected.filter(p => p.readyNext).length;
-      const me = (st.players || []).find(p => p.playerId === playerState.playerId);
-      const imReady = !!(me && me.readyNext);
-      btn.disabled = imReady;
-      btn.textContent = imReady ? "✅ Готов" : "Следующий раунд";
-      wait.textContent = total > 0 ? `Ожидание игроков: ${ready}/${total} готовы` : "";
+      btn.disabled = meReady;
+      btn.textContent = meReady ? "✅ Готов" : "Готов";
+      wait.textContent = waitText;
     } else {
       wrap.classList.add("hidden");
       btn.disabled = false;
-      btn.textContent = "Следующий раунд";
+      btn.textContent = "Готов";
       wait.textContent = "";
     }
   }
+
+  // [ANCHOR] MB:F:WINNER_NEXT:DEBUG — small, non-spammy debug about visibility decisions
+  try{
+    const key = JSON.stringify({ overlayVisible, canSee, voteDone, meVoted: !!meVoted, meMissed: !!meMissed, meConnected: !!meConnected, meReady: !!meReady });
+    if (window.__mb_lastNextUiKey !== key) {
+      window.__mb_lastNextUiKey = key;
+      pushDebug("winner-next-ui", { overlayVisible, canSee, voteDone, meVoted: !!meVoted, meMissed: !!meMissed, meConnected: !!meConnected, meReady: !!meReady });
+    }
+  }catch(e){}
 }
 
+
+
+// [ANCHOR] MB:F:WINNER_OVERLAY — winner/tie celebration (no auto-close if displayMs<=0)
 function showWinnerOverlay(payloadOrWinner = {}) {
   const ov = $("winner-overlay");
   if (!ov) return Promise.resolve();
+
+  // Host-only controls
+  try{
+    // [BUGWATCH] Rely on currentRoom (host-created) instead of screen visibility.
+    const isHostClient = !!currentRoom;
+    $("winner-host-controls")?.classList.toggle("hidden", !isHostClient);
+  }catch(e){}
 
   // Accept both formats:
   // 1) payload: { winners, winner, maxVotes, displayMs, tie }
@@ -1386,7 +1960,9 @@ function showWinnerOverlay(payloadOrWinner = {}) {
     ? payload.winners
     : (payload.winner ? [payload.winner] : []);
 
-  const displayMs = Number.isFinite(Number(payload.displayMs)) ? Number(payload.displayMs) : 3000;
+  let displayMs = Number.isFinite(Number(payload.displayMs)) ? Number(payload.displayMs) : 3000;
+  if (!Number.isFinite(displayMs)) displayMs = 3000;
+  displayMs = Math.max(0, Math.round(displayMs));
 
   // Build fallback meme map from latest room-status (revealed during vote) and host cache
   const fallbackMemes = []
@@ -1510,7 +2086,7 @@ function showWinnerOverlay(payloadOrWinner = {}) {
       const media = document.createElement("div");
       media.className = "wsMedia";
       if (w && w.url) {
-        media.innerHTML = renderMediaHTML(w.url);
+        media.innerHTML = renderMemeHTML(w);
       } else {
         media.innerHTML = `<div class="muted" style="padding:12px">Нет медиа</div>`;
       }
@@ -1566,6 +2142,9 @@ function showWinnerOverlay(payloadOrWinner = {}) {
   void ov.offsetWidth;
   ov.classList.add("ws-on");
 
+  // If displayMs <= 0 => keep overlay visible (it will be hidden on next round start).
+  if (displayMs <= 0) return Promise.resolve();
+
   return new Promise((resolve) => {
     window.__MB_WIN_TO = setTimeout(() => {
       ov.classList.remove("ws-on");
@@ -1581,11 +2160,177 @@ function showWinnerOverlay(payloadOrWinner = {}) {
 }
 
 
+function hideWinnerOverlay(){
+  const ov = $("winner-overlay");
+  if(!ov) return;
+  if (window.__MB_WIN_TO) clearTimeout(window.__MB_WIN_TO);
+  if (window.__MB_WIN_TO2) clearTimeout(window.__MB_WIN_TO2);
+  ov.classList.add("hidden");
+  ov.classList.remove("ws-on");
+  ov.classList.remove("ws-leave");
+  ov.setAttribute("aria-hidden", "true");
+}
+
+
+// =====================================================================
+// [ANCHOR] MB:F:FINAL_OVERLAY — Host Final Results full-screen stage
+// =====================================================================
+function hideFinalOverlay(){
+  const ov = $("final-overlay");
+  if(!ov) return;
+  ov.classList.add("hidden");
+  ov.classList.remove("fs-on");
+  // [ANCHOR] MB:F:FINAL_OVERLAY_PLAYER_RESET — clear player-mode styling (prevents sticky UI)
+  ov.classList.remove("fs-player");
+  ov.setAttribute("aria-hidden", "true");
+}
+
+// =====================================================================
+// [ANCHOR] MB:F:FINAL_OVERLAY_SHOW — supports host + player (score-only)
+// =====================================================================
+function showFinalOverlay(results = [], opts = {}){
+  const ov = $("final-overlay");
+  if(!ov) return;
+
+  const mode = String(opts?.mode || (currentRoom ? "host" : "player"));
+  const isPlayerMode = (mode === "player");
+  // Apply player-only styling (score-only final screen)
+  ov.classList.toggle("fs-player", isPlayerMode);
+
+  // Host-only button should never be visible for players
+  try{ $("final-host-new-game")?.classList.toggle("hidden", isPlayerMode); }catch(e){}
+
+  // Ensure other full-screen stages are not blocking interaction
+  try{ hideWinnerOverlay(); }catch(e){}
+
+  const raw = Array.isArray(results) ? results : [];
+  const players = raw
+    .map(r => ({
+      name: String(r?.name || r?.nickname || "").trim(),
+      score: Number(r?.score || 0)
+    }))
+    .map(p => ({ name: p.name || "PLAYER", score: Number.isFinite(p.score) ? p.score : 0 }))
+    .sort((a,b)=> b.score - a.score);
+
+  const winner = players[0] || { name: "—", score: 0 };
+  const topScore = Number.isFinite(winner.score) ? Number(winner.score) : 0;
+  const tiedPlayers = players.filter(p => Number(p.score) === topScore);
+  const isTie = tiedPlayers.length > 1;
+  const topThree = players.slice(0,3);
+  const restPlayers = players.slice(3);
+
+  // Winner fields
+  const wn = $("final-winner-name");
+  const ws = $("final-winner-score");
+  if(wn){
+    if(isTie){
+      const names = tiedPlayers.map(p => String(p.name || "PLAYER")).filter(Boolean);
+      const shown = names.slice(0, 3);
+      let label = shown.join(" • ");
+      if(names.length > 3) label += ` +${names.length - 3}`;
+      wn.textContent = label || "—";
+    } else {
+      wn.textContent = String(winner.name || "—");
+    }
+  }
+  if(ws) ws.textContent = String(Number(winner.score || 0));
+
+  // Player-only: show "ПОБЕДИТЕЛЬ" label and tie state.
+  // Host should remain unchanged.
+  const champEl = ov.querySelector?.('.fsChampion');
+  if(champEl){
+    if(isPlayerMode) champEl.textContent = isTie ? "НИЧЬЯ" : "ПОБЕДИТЕЛЬ";
+    else champEl.textContent = "CHAMPION";
+  }
+
+  // TOP 3 (host only). Player mode is score-only.
+  const topBox = $("final-top3");
+  if(topBox) topBox.innerHTML = "";
+  if(!isPlayerMode && topBox){
+    const medals = ["🥇","🥈","🥉"];
+    topThree.forEach((p, idx)=>{
+      const row = document.createElement("div");
+      row.className = `fsTopRow place${idx+1}`;
+      row.style.setProperty("--d", `${0.3 + idx*0.1}s`);
+
+      const medal = document.createElement("div");
+      medal.className = "fsMedal";
+      medal.textContent = medals[idx] || "🏅";
+
+      const pos = document.createElement("div");
+      pos.className = "fsPosBadge";
+      pos.textContent = String(idx+1);
+
+      const name = document.createElement("div");
+      name.className = "fsPName";
+      name.textContent = String(p.name || "PLAYER");
+
+      const pts = document.createElement("div");
+      pts.className = "fsScorePill";
+      pts.textContent = String(Number(p.score || 0));
+
+      row.appendChild(medal);
+      row.appendChild(pos);
+      row.appendChild(name);
+      row.appendChild(pts);
+      topBox.appendChild(row);
+    });
+  }
+
+  // Rest
+  const restWrap = $("final-rest-wrap");
+  const restBox = $("final-rest");
+  if(restWrap && restBox){
+    restBox.innerHTML = "";
+    restWrap.classList.toggle("hidden", restPlayers.length === 0);
+
+    // Player mode: keep it hidden no matter what
+    if(isPlayerMode) restWrap.classList.add("hidden");
+
+    if(!isPlayerMode) restPlayers.forEach((p, idx)=>{
+      const row = document.createElement("div");
+      row.className = "fsRestRow";
+      row.style.setProperty("--d", `${0.6 + idx*0.05}s`);
+
+      const pos = document.createElement("div");
+      pos.className = "fsRestPos";
+      pos.textContent = String(idx + 4);
+
+      const name = document.createElement("div");
+      name.className = "fsRestName";
+      name.textContent = String(p.name || "PLAYER");
+
+      const score = document.createElement("div");
+      score.className = "fsRestScore";
+      score.textContent = String(Number(p.score || 0));
+
+      row.appendChild(pos);
+      row.appendChild(name);
+      row.appendChild(score);
+      restBox.appendChild(row);
+    });
+  }
+
+  ov.classList.remove("hidden");
+  ov.setAttribute("aria-hidden", "false");
+
+  // Restart entrance animations
+  ov.classList.remove("fs-on");
+  void ov.offsetWidth;
+  ov.classList.add("fs-on");
+
+  pushDebug("final-overlay:show", { mode, players: players.length, winner: winner.name, winnerScore: winner.score, isTie, tied: tiedPlayers.map(p=>p.name).slice(0,6) });
+}
+
+
+
 let hostLatestMemes = [];
 let hostMemesCount = 0;
 let hostMemesRevealed = false;
 let hostPhase = "lobby";
 
+
+// [ANCHOR] MB:F:HOST_SETUP — create room, tasks, start game
 // -------- Host UI
 function hostSetRoom(code){
   currentRoom = code;
@@ -1617,6 +2362,12 @@ function hostSetRoom(code){
   // Buttons
   if ($("host-start-game")) $("host-start-game").disabled = !c;
   if ($("ai-generate")) $("ai-generate").disabled = !c || !aiState.enabled;
+
+  // [ANCHOR] MB:DEBUG:hostSetRoom — sync room debug toggle + fetch snapshot
+  try{
+    if(c && DEBUG){ setRoomDebugEnabled(true); requestDebugSnapshot(); }
+    if(c && !DEBUG){ setRoomDebugEnabled(false); }
+  }catch(e){}
 }
 
 $("host-copy-link")?.addEventListener("click", async () => {
@@ -2207,6 +2958,7 @@ function ensureRoom(){
 $("host-start-game")?.addEventListener("click", async () => {
   if(!ensureRoom()) return;
 
+
   parseTasks();
 
   // IMPORTANT: tasks generation is a separate button now.
@@ -2332,8 +3084,22 @@ function renderResults(){
   });
 }
 
-$("host-next-round")?.addEventListener("click", () => {
+
+
+// [ANCHOR] MB:F:HOST_FORCE_NEXT — shared handler for normal + emergency next round
+function hostAdvanceRound(opts = {}){
+  const forced = !!opts.forced;
   if(!ensureRoom()) return;
+
+  // [ANCHOR] MB:F:HOST_NEXT:ROUND_SOURCE — trust server roundNumber if available
+  try{
+    const serverRound = Number(lastRoomStatus?.roundNumber || 0);
+    if (Number.isFinite(serverRound) && serverRound > (hostState.round || 0)) {
+      hostState.round = serverRound;
+    }
+  }catch(e){}
+
+  if(forced) pushDebug("host-next-round:forced", { roomCode: currentRoom, round: hostState.round });
 
   // add points from current memes (only if they were revealed)
   if (hostLatestMemes.length > 0){
@@ -2359,8 +3125,13 @@ $("host-next-round")?.addEventListener("click", () => {
     pushDebug("host-task-update", res);
     if(!res?.ok) alert(res?.error || "Ошибка");
   });
-});
+}
 
+$("host-next-round")?.addEventListener("click", () => hostAdvanceRound({ forced:false }));
+
+// [ANCHOR] MB:F:HOST_FORCE_NEXT:BTN — emergency next round buttons
+$("host-vote-force-next")?.addEventListener("click", () => hostAdvanceRound({ forced:true }));
+delegateClick("#winner-host-next-round", (ev)=>{ ev.preventDefault(); pushDebug("winner-host-next-round:click", { roomCode: currentRoom || null }); hostAdvanceRound({ forced:true }); });
 $("host-end-game")?.addEventListener("click", () => {
   if(!ensureRoom()) return;
   const results = Object.entries(hostState.scores).map(([nickname, score])=>({ nickname, score }));
@@ -2373,66 +3144,424 @@ $("host-end-game")?.addEventListener("click", () => {
   });
 });
 
-$("host-new-game")?.addEventListener("click", () => {
+// [ANCHOR] MB:F:HOST_NEW_GAME — reset scores + return host to setup
+function hostRequestNewGame(source = "host"){
   if(!ensureRoom()) return;
+  pushDebug("host-new-game:click", { source, roomCode: currentRoom });
   if(!confirm("Начать новую игру в этой комнате? Очки будут сброшены.")) return;
 
   socket.emit("host-new-game", { roomCode: currentRoom }, (res)=>{
     pushDebug("host-new-game", res);
     if(!res?.ok) return alert(res?.error || "Ошибка");
+
+    // Local reset (server is the source of truth, this is UI-only)
     hostState.round = 0;
     hostState.scores = {};
     renderResults();
     hostUpdateRoundInfo();
-    $("host-new-game").classList.add("hidden");
-    $("host-next-round").disabled = true;
-    $("host-end-game").disabled = false;
-    $("host-start-vote").disabled = true;
-    showScreen("mode");
-  });
-});
 
-// -------- Player UI
-const urlRoom = new URLSearchParams(location.search).get("room") || "";
-const pr = $("player-room");
-if (pr) pr.value = (urlRoom || localStorage.getItem(LS_ROOM) || "").toUpperCase();
-const pn = $("player-nick");
-if (pn) pn.value = (localStorage.getItem(LS_NICK) || "");
-$("player-room")?.addEventListener("input", () => $("player-room").value = $("player-room").value.toUpperCase());
-$("player-nick")?.addEventListener("change", () => {
-  const v = $("player-nick").value.trim().slice(0,24);
-  $("player-nick").value = v;
-  if(v) localStorage.setItem(LS_NICK, v);
-});
+    // Hide full-screen stages
+    try{ hideFinalOverlay(); }catch(e){}
+    try{ hideWinnerOverlay(); }catch(e){}
 
-function joinRoom(room, nick, silent=false){
-  const roomCode = String(room||"").trim().toUpperCase();
-  const nickname = String(nick||"").trim().slice(0,24);
-  if(!roomCode || !nickname){
-    if(!silent) $("player-join-status").textContent = "Нужен код комнаты и ник";
-    return;
-  }
-  socket.emit("player-join", { roomCode, nickname }, (res)=>{
-    pushDebug("player-join", res);
-    if(!res?.ok){ $("player-join-status").textContent = res?.error || "Ошибка"; return; }
-    playerState.joined = true;
-    playerState.playerId = res.playerId || "";
-    playerState.nickname = res.nickname || nickname;
-    playerState.roomCode = roomCode;
-    localStorage.setItem(LS_NICK, playerState.nickname);
-    localStorage.setItem(LS_ROOM, roomCode);
-    $("player-join-status").textContent = res.rejoined ? "✅ Возврат в игру" : "✅ Вошёл";
-    if (res.task) $("player-task").textContent = res.task;
-    $("player-sent").classList.add("hidden");
-    $("player-voted").classList.add("hidden");
-    $("player-vote-finished")?.classList.add("hidden");
-    $("host-vote-finished")?.classList.add("hidden");
-    $("player-vote-finished")?.classList.add("hidden");
+    // Disable/enable controls
+    $("host-new-game")?.classList.add("hidden");
+    $("host-next-round")?.setAttribute("disabled", "true");
+    if($("host-next-round")) $("host-next-round").disabled = true;
+    if($("host-start-vote")) $("host-start-vote").disabled = true;
+
+    // Return to host setup (same room)
+    try{ showScreen("host"); }catch(e){}
+    try{ setHostView("setup"); }catch(e){}
   });
 }
-$("player-join")?.addEventListener("click", () => joinRoom($("player-room").value, $("player-nick").value));
+
+$("host-new-game")?.addEventListener("click", () => hostRequestNewGame("host-old-ui"));
+// Final overlay button is rendered after scripts -> use delegated click
+delegateClick("#final-host-new-game", (ev)=>{ ev.preventDefault(); hostRequestNewGame("host-final"); });
+
+
+// [ANCHOR] MB:F:PLAYER — join, submit meme, vote, next round
+// -------- Player UI (JOIN + SUBMIT V2)
+
+const playerUi = {
+  isJoining: false,
+  showQR: false,
+  memeType: null, // "file" | "link" | "text" | null
+  roundActive: false,
+  serverOffsetMs: 0,
+  collectEndsAt: 0,
+  timerTick: null,
+};
+
+function pShow(elId, on){
+  const el = $(elId);
+  if(!el) return;
+  el.classList.toggle('hidden', !on);
+}
+
+function playerSetJoinError(msg){
+  const e = $("player-join-error");
+  if(!e) return;
+  if(msg){ e.textContent = msg; e.classList.remove('hidden'); }
+  else { e.textContent = ""; e.classList.add('hidden'); }
+}
+
+function playerJoinValid(){
+  const code = String($("player-room")?.value || "").trim();
+  const nick = String($("player-nick")?.value || "").trim();
+  return code.length >= 4 && nick.length > 0;
+}
+
+function playerUpdateJoinBtn(){
+  const btn = $("player-join");
+  if(!btn) return;
+  const valid = playerJoinValid();
+  btn.classList.toggle('hidden', !valid);
+  btn.disabled = playerUi.isJoining;
+  btn.textContent = playerUi.isJoining ? "JOINING..." : "JOIN ROOM";
+}
+
+function handleRoomCodeChange(v){
+  const cleaned = String(v||"").replace(/\s/g, "").toUpperCase().slice(0, 12);
+  if($("player-room")) $("player-room").value = cleaned;
+  playerSetJoinError("");
+  playerUpdateJoinBtn();
+}
+
+function handleNicknameChange(v){
+  const vv = String(v||"").slice(0, 20);
+  if($("player-nick")) $("player-nick").value = vv;
+  const c = $("player-nick-count");
+  if(c) c.textContent = `${vv.length}/20`;
+  playerSetJoinError("");
+  playerUpdateJoinBtn();
+}
+
+function playerShowJoin(){
+  pShow('player-view-join', true);
+  pShow('player-view-game', false);
+}
+
+function playerShowSubmit(){
+  pShow('player-view-join', false);
+  pShow('player-view-game', true);
+}
+
+// Prefill room code: /join/ROOMCODE or ?room=ROOMCODE
+(function initPlayerPrefill(){
+  try{
+    const sp = new URLSearchParams(location.search);
+    let code = sp.get('room') || '';
+    if(!code){
+      const m = String(location.pathname||'').match(/\/join\/([A-Za-z0-9_-]{2,})/);
+      if(m) code = m[1];
+    }
+    const saved = localStorage.getItem(LS_ROOM) || '';
+    if($("player-room")) $("player-room").value = String(code || saved || '').toUpperCase();
+  }catch(e){}
+  try{ if($("player-nick")) $("player-nick").value = (localStorage.getItem(LS_NICK) || ''); }catch(e){}
+  handleRoomCodeChange($("player-room")?.value || "");
+  handleNicknameChange($("player-nick")?.value || "");
+})();
+
+$("player-room")?.addEventListener('input', (e)=> handleRoomCodeChange(e.target.value));
+$("player-nick")?.addEventListener('input', (e)=> handleNicknameChange(e.target.value));
+
+$("player-nick")?.addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter' && playerJoinValid()) joinRoom($("player-room").value, $("player-nick").value);
+});
+
+// QR mock
+$("player-qr-btn")?.addEventListener('click', ()=>{
+  if(playerUi.isJoining) return;
+  playerUi.showQR = true;
+  pShow('player-qr-overlay', true);
+  setTimeout(()=>{
+    if(!playerUi.showQR) return;
+    handleRoomCodeChange('ABC123');
+    playerUi.showQR = false;
+    pShow('player-qr-overlay', false);
+  }, 1500);
+});
+$("player-qr-cancel")?.addEventListener('click', ()=>{
+  playerUi.showQR = false;
+  pShow('player-qr-overlay', false);
+});
+
+function joinRoom(room, nick){
+  const roomCode = String(room||"").trim().toUpperCase();
+  const nickname = String(nick||"").trim().slice(0,20);
+  if(roomCode.length < 4){ playerSetJoinError('Invalid room code'); return; }
+  if(!nickname){ playerSetJoinError('Enter your name'); return; }
+
+  playerUi.isJoining = true;
+  playerSetJoinError('');
+  playerUpdateJoinBtn();
+
+  socket.emit('player-join', { roomCode, nickname }, (res)=>{
+    pushDebug('player-join', res);
+    playerUi.isJoining = false;
+    playerUpdateJoinBtn();
+
+    if(!res?.ok){
+      playerSetJoinError(res?.error || 'Failed to join room. Please try again.');
+      return;
+    }
+
+    playerState.joined = true;
+    playerState.playerId = res.playerId || '';
+    playerState.nickname = res.nickname || nickname;
+    playerState.roomCode = roomCode;
+
+    // [ANCHOR] MB:F:PLAYER_SCORE_SHOW_ON_JOIN — show score indicator immediately after join (prevents "missing" state)
+    try{
+      pShow('player-score-wrap', true);
+      pShow('player-score-btn', true);
+      $("player-leaderboard")?.classList.add('hidden');
+    }catch(e){}
+
+    localStorage.setItem(LS_NICK, playerState.nickname);
+    localStorage.setItem(LS_ROOM, roomCode);
+
+    $("player-join-status").textContent = res.rejoined ? '✅ Rejoined' : '✅ Joined';
+    if(res.task) $("player-task").textContent = res.task;
+
+    // Seed status snapshot (important for player timer + UI if first room-status is missed)
+    try{
+      const snap = {
+        roomCode: roomCode,
+        phase: res.phase || null,
+        roundNumber: Number(res.roundNumber || 0),
+        totalRounds: Number(res.totalRounds || 0),
+        task: String(res.task || ''),
+        currentTheme: String(res.task || ''),
+        collectEndsAt: res.collectEndsAt ? Number(res.collectEndsAt) : null,
+        voteEndsAt: res.voteEndsAt ? Number(res.voteEndsAt) : null,
+        collectSeconds: res.collectSeconds ? Number(res.collectSeconds) : null,
+        voteSeconds: res.voteSeconds ? Number(res.voteSeconds) : null,
+        serverNow: res.serverNow ? Number(res.serverNow) : Date.now(),
+      };
+      lastRoomStatus = { ...(lastRoomStatus||{}), ...snap };
+      playerTimerSyncFromStatus(snap);
+      pushDebug('player-join:snap', { phase: snap.phase, collectEndsAt: snap.collectEndsAt, voteEndsAt: snap.voteEndsAt, serverNow: snap.serverNow });
+    }catch(e){}
+
+    // Reset per round UI
+    pShow('player-sent', false);
+    pShow('player-voted', false);
+    pShow('player-vote-finished', false);
+
+    playerShowSubmit();
+  });
+}
+$("player-join")?.addEventListener('click', ()=> joinRoom($("player-room").value, $("player-nick").value));
+
+// Settings panel
+$("player-settings-btn")?.addEventListener('click', ()=>{
+  pShow('player-settings-overlay', true);
+  const st = $("player-settings-status");
+  if(st) st.textContent = socket.connected ? 'ONLINE' : 'OFFLINE';
+  const rm = $("player-settings-room");
+  if(rm) rm.textContent = playerState.roomCode || $("player-room")?.value || '—';
+});
+$("player-settings-close")?.addEventListener('click', ()=> pShow('player-settings-overlay', false));
+$("player-settings-reconnect")?.addEventListener('click', ()=>{ try{ socket.connect(); }catch(e){} });
+
+// Score pill dropdown
+$('player-score-btn')?.addEventListener('click', ()=>{
+  const lb = $('player-leaderboard');
+  if(!lb) return;
+  lb.classList.toggle('hidden');
+  // will be populated on room-status updates
+});
+
+function playerRenderLeaderboard(players){
+  const lb = $('player-leaderboard');
+  if(!lb) return;
+  const ps = Array.isArray(players) ? players.slice() : [];
+  ps.sort((a,b)=> Number(b.score||0) - Number(a.score||0));
+  const rows = ps.map((p,i)=>{
+    const rank = i+1;
+    const isMe = String(p.id||'') === String(playerState.playerId||'') || String(p.nickname||'') === String(playerState.nickname||'');
+    const nm = String(p.nickname||'PLAYER');
+    const score = Number(p.score||0);
+    return `<div class="pLbRow ${isMe?'me':''}"><div class="pLbLeft"><span class="pLbRank r${rank}">${rank}</span><span class="pLbName">${escapeHtml(nm)}${isMe?' <span class=\"pLbYou\">(YOU)</span>':''}</span></div><div class="pLbScore">${score}</div></div>`;
+  }).join('');
+  lb.innerHTML = `<div class="pLbHead">🏆 LEADERBOARD</div><div class="pLbList">${rows || '<div class=\"pLbEmpty\">—</div>'}</div>`;
+}
+
+function playerSetMemeType(type){
+  playerUi.memeType = type;
+
+  // chooser vs mode panels
+  pShow('player-type-chooser', type === null);
+  pShow('player-mode-file', type === 'file');
+  pShow('player-mode-link', type === 'link');
+  pShow('player-mode-text', type === 'text');
+
+  // reset fields when switching types
+  if(type === 'text'){
+    if($("player-meme-url")) $("player-meme-url").value = '';
+    if($("player-meme-file")) $("player-meme-file").value = '';
+    if($("player-meme-caption")) $("player-meme-caption").value = '';
+    if($("player-meme-url-link")) $("player-meme-url-link").value = '';
+    if($("player-meme-caption-link")) $("player-meme-caption-link").value = '';
+  }
+  if(type === 'file'){
+    if($("player-meme-text")) $("player-meme-text").value = '';
+    if($("player-meme-url-link")) $("player-meme-url-link").value = '';
+    if($("player-meme-caption-link")) $("player-meme-caption-link").value = '';
+  }
+  if(type === 'link'){
+    if($("player-meme-text")) $("player-meme-text").value = '';
+    if($("player-meme-url")) $("player-meme-url").value = '';
+    if($("player-meme-file")) $("player-meme-file").value = '';
+    if($("player-meme-caption")) $("player-meme-caption").value = '';
+  }
+
+  // hide captions by default (will be re-enabled by visibility update)
+  pShow('player-caption-wrap', false);
+  pShow('player-caption-wrap-link', false);
+
+  // hide previews
+  try{ const i=$("player-preview"); if(i){ i.classList.add('hidden'); i.removeAttribute('src'); } }catch(e){}
+  try{ const i=$("player-preview-link"); if(i){ i.classList.add('hidden'); i.removeAttribute('src'); } }catch(e){}
+
+  playerUpdateCaptionVisibility();
+  playerUpdatePreview();
+  playerUpdateSubmitBtn();
+}
+
+function playerCanSubmit(){
+  if(!playerState.joined) return false;
+  if(!playerUi.roundActive) return false;
+  if(playerUi.memeType === 'text'){
+    return !!String($("player-meme-text")?.value || '').trim();
+  }
+  if(playerUi.memeType === 'file'){
+    const file = $("player-meme-file")?.files?.[0] || null;
+    const url = String($("player-meme-url")?.value || '').trim();
+    return !!file || !!url;
+  }
+  if(playerUi.memeType === 'link'){
+    const url = String($("player-meme-url-link")?.value || '').trim();
+    return !!url;
+  }
+  return false;
+}
+
+function playerUpdateSubmitBtn(){
+  // sticky submit visible only when round active and type chosen
+  pShow('player-submit-sticky', playerUi.roundActive && playerUi.memeType !== null);
+  const btn = $("player-send-meme");
+  if(!btn) return;
+  btn.disabled = !playerCanSubmit();
+}
+
+$("player-type-file")?.addEventListener('click', ()=> playerSetMemeType('file'));
+$("player-type-link")?.addEventListener('click', ()=> playerSetMemeType('link'));
+$("player-type-text")?.addEventListener('click', ()=> playerSetMemeType('text'));
+
+$("player-back-file")?.addEventListener('click', ()=> playerSetMemeType(null));
+$("player-back-link")?.addEventListener('click', ()=> playerSetMemeType(null));
+$("player-back-text")?.addEventListener('click', ()=> playerSetMemeType(null));
+
+$("player-meme-url")?.addEventListener('input', ()=>{ playerUpdateCaptionVisibility(); playerUpdateSubmitBtn(); playerUpdatePreview(); });
+$("player-meme-file")?.addEventListener('change', ()=>{ playerUpdateCaptionVisibility(); playerUpdateSubmitBtn(); });
+$("player-meme-caption")?.addEventListener('input', playerUpdateSubmitBtn);
+
+$("player-meme-url-link")?.addEventListener('input', ()=>{ playerUpdateCaptionVisibility(); playerUpdateSubmitBtn(); playerUpdatePreview(); });
+$("player-meme-caption-link")?.addEventListener('input', playerUpdateSubmitBtn);
+
+$("player-meme-text")?.addEventListener('input', playerUpdateSubmitBtn);
+
+function playerUpdateCaptionVisibility(){
+  // Text-only memes: no comment/caption
+  if(playerUi.memeType === 'text'){
+    pShow('player-caption-wrap', false);
+    pShow('player-caption-wrap-link', false);
+    return;
+  }
+  if(playerUi.memeType === 'file'){
+    const file = $("player-meme-file")?.files?.[0] || null;
+    const url = String($("player-meme-url")?.value || '').trim();
+    pShow('player-caption-wrap', !!file || !!url);
+    pShow('player-caption-wrap-link', false);
+    return;
+  }
+  if(playerUi.memeType === 'link'){
+    const url = String($("player-meme-url-link")?.value || '').trim();
+    pShow('player-caption-wrap-link', !!url);
+    pShow('player-caption-wrap', false);
+    return;
+  }
+  pShow('player-caption-wrap', false);
+  pShow('player-caption-wrap-link', false);
+}
+
+function playerUpdatePreview(){
+  // FILE preview
+  try{
+    const img = $("player-preview");
+    if(img){
+      const url = String($("player-meme-url")?.value || '').trim();
+      if(playerUi.memeType !== 'file' || !url || !/^https?:\/\//i.test(url)){
+        img.classList.add('hidden');
+        img.removeAttribute('src');
+      }else{
+        img.src = url;
+        img.onerror = ()=>{ img.classList.add('hidden'); };
+        img.onload = ()=>{ img.classList.remove('hidden'); };
+      }
+    }
+  }catch(e){}
+
+  // LINK preview
+  try{
+    const img = $("player-preview-link");
+    if(img){
+      const url = String($("player-meme-url-link")?.value || '').trim();
+      if(playerUi.memeType !== 'link' || !url || !/^https?:\/\//i.test(url)){
+        img.classList.add('hidden');
+        img.removeAttribute('src');
+      }else{
+        img.src = url;
+        img.onerror = ()=>{ img.classList.add('hidden'); };
+        img.onload = ()=>{ img.classList.remove('hidden'); };
+      }
+    }
+  }catch(e){}
+}
+
+function playerStopTimer(){
+  if(playerUi.timerTick){ clearInterval(playerUi.timerTick); playerUi.timerTick = null; }
+}
+function playerStartTimer(){
+  playerStopTimer();
+  playerUi.timerTick = setInterval(()=>{
+    if(!playerUi.collectEndsAt){ return; }
+    const now = Date.now() + playerUi.serverOffsetMs;
+    const left = Math.max(0, Math.ceil((playerUi.collectEndsAt - now)/1000));
+    const pill = $("player-timer");
+    if(pill){
+      pill.textContent = String(left);
+      pill.classList.remove('isOk','isWarn','isCrit','bounceOnce');
+      if(left <= 10){ pill.classList.add('isCrit','bounceOnce'); }
+      else if(left <= 20){ pill.classList.add('isWarn'); }
+      else { pill.classList.add('isOk'); }
+      if(left <= 10){ pill.classList.remove('bounceOnce'); void pill.offsetWidth; pill.classList.add('bounceOnce'); }
+    }
+  }, 1000);
+}
+
+// Initial view
+playerShowJoin();
+playerSetMemeType(null);
+playerUpdateJoinBtn();
 
 async function fileToDataUrl(file){
+
   return new Promise((resolve, reject)=>{
     const fr = new FileReader();
     fr.onload = () => resolve(String(fr.result||""));
@@ -2509,25 +3638,50 @@ async function mediaDurationFromUrl(url, kind){
 }
 $("player-send-meme")?.addEventListener("click", async () => {
   if(!playerState.joined){ $("player-join-status").textContent = "Сначала войди в комнату"; return; }
-  const file = $("player-meme-file").files?.[0] || null;
+  if(!playerUi.roundActive){ return; }
+
+  // TEXT-ONLY
+  if(playerUi.memeType === "text"){
+    const text = String($("player-meme-text")?.value || "").trim();
+    if(!text) return;
+    const payload = { roomCode: playerState.roomCode, text };
+    pushDebug("player:send:text:emit", { roomCode: playerState.roomCode, textLen: text.length });
+    socket.emit("player-send-meme", payload, (res)=>{
+      pushDebug("player-send-meme:text", res);
+      if(!res?.ok){ alert(res?.error || "Ошибка отправки"); return; }
+      $("player-sent")?.classList.remove("hidden");
+    });
+    return;
+  }
+
+  // FILE/LINK
+  const isFileMode = playerUi.memeType === "file";
+  const isLinkMode = playerUi.memeType === "link";
+  const urlElId = isLinkMode ? "player-meme-url-link" : "player-meme-url";
+  const captionElId = isLinkMode ? "player-meme-caption-link" : "player-meme-caption";
+
+  const file = isFileMode ? ($("player-meme-file")?.files?.[0] || null) : null;
   let url = "";
   pushDebug("player:send:input", {
     roomCode: playerState.roomCode,
+    memeType: playerUi.memeType,
     hasFile: Boolean(file),
     file: file ? { name: file.name, type: file.type, size: file.size } : null,
-    rawUrl: dbgValueShort($("player-meme-url")?.value || "")
+    rawUrl: dbgValueShort($(urlElId)?.value || "")
   });
+
   if(file){
     if(file.size > 8 * 1024 * 1024){ alert("Файл слишком большой. Лимит ~8MB."); return; }
     url = await fileToDataUrl(file);
     pushDebug("player:send:file_read", dbgValueShort(url));
   }else{
-    url = String($("player-meme-url").value || "").trim();
+    url = String($(urlElId)?.value || "").trim();
     const normalized = await normalizeVideoLink(url);
     pushDebug("player:send:normalized", { in: url, out: normalized.url || url, meta: normalized });
     url = normalized.url || url;
   }
-  const caption = String($("player-meme-caption").value || "").trim();
+
+  const caption = String($(captionElId)?.value || "").trim();
   const dt = detectMediaType(url).type;
   const kind = normalizeMemeKindFromDetect(dt, url);
   let durationSec = null;
@@ -2542,23 +3696,45 @@ $("player-send-meme")?.addEventListener("click", async () => {
   socket.emit("player-send-meme", payload, (res)=>{
     pushDebug("player-send-meme", res);
     if(!res?.ok){ alert(res?.error || "Ошибка отправки"); return; }
-    $("player-sent").classList.remove("hidden");
+    $("player-sent")?.classList.remove("hidden");
   });
 });
 $("player-next-round")?.addEventListener("click", () => {
   if (!playerState.roomCode) return;
+  pushDebug("player-ready-next:click", { roomCode: playerState.roomCode });
   socket.emit("player-ready-next", { roomCode: playerState.roomCode }, (res) => {
     if (!res || !res.ok) {
       pushDebug("player-ready-next:fail", res || {});
       return;
     }
+    try{ playerState.readyNextLocal = true; }catch(e){}
     pushDebug("player-ready-next", { ok: true });
+    try{ updateNextRoundUI(); }catch(e){}
+    // UI updates via room-status
+  });
+});
+
+// [ANCHOR] MB:F:WINNER_PLAYER_NEXT_BTN — player ready-next button inside winner overlay
+delegateClick("#winner-player-next-round", (ev)=>{
+  ev.preventDefault();
+  if (!playerState.roomCode) return;
+  pushDebug("winner-player-ready-next:click", { roomCode: playerState.roomCode });
+  socket.emit("player-ready-next", { roomCode: playerState.roomCode }, (res) => {
+    if (!res || !res.ok) {
+      pushDebug("winner-player-ready-next:fail", res || {});
+      return;
+    }
+    try{ playerState.readyNextLocal = true; }catch(e){}
+    pushDebug("winner-player-ready-next", { ok: true });
+    try{ updateNextRoundUI(); }catch(e){}
     // UI updates via room-status
   });
 });
 
 
 // -------- Live updates
+
+// [ANCHOR] MB:F:SOCKET:MEMES_READY — reveal memes (end collect)
 socket.on("memes-ready", (p) => {
   // only host cares
   if (p?.roomCode === currentRoom){
@@ -2568,10 +3744,29 @@ socket.on("memes-ready", (p) => {
   }
 });
 
+// [ANCHOR] MB:F:SOCKET:ROOM_STATUS — server snapshot (phase, timers, players)
 socket.on("room-status", (st) => {
   // store status for waiting UI
   lastRoomStatus = st;
+
+  // [ANCHOR] MB:CALL:PLAYER_TIMER_SYNC
+  try{ playerTimerSyncFromStatus(st); }catch(e){}
+
+  // [ANCHOR] MB:F:FINAL_OVERLAY_AUTOHIDE — prevent player final overlay from sticking into the next game
+  try{
+    if(st && st.phase && st.phase !== "finished") hideFinalOverlay();
+  }catch(e){}
+
+  // [ANCHOR] MB:DBG:ROOM_STATUS_BRIEF
+  try{
+    const sig = String(st.roomCode||"" ) + "|" + String(st.phase||"" ) + "|" + String(st.roundNumber||0) + "|" + String(st.collectEndsAt||0) + "|" + String(st.voteEndsAt||0);
+    if(sig !== window.__mbLastRoomStatusSig){
+      window.__mbLastRoomStatusSig = sig;
+      pushDebug("room-status", { roomCode: st.roomCode, phase: st.phase, roundNumber: st.roundNumber, collectEndsAt: st.collectEndsAt, voteEndsAt: st.voteEndsAt, serverNow: st.serverNow });
+    }
+  }catch(e){}
   updateNextRoundUI();
+  try{ updateHostMiniStatus(st); }catch(e){}
   // host view
   if (st?.roomCode && st.roomCode === currentRoom){
     hostPhase = st.phase || "—";
@@ -2675,7 +3870,7 @@ if (boxSetup){
           const el = document.createElement("div");
           el.className = "meme";
           el.innerHTML = `
-            ${renderMediaHTML(m.url)}
+            ${renderMemeHTML(m)}
             <div class="cap">${m.caption ? m.caption : ""}</div>
             <div class="meta"><span>${m.nickname||""}</span><b>${Number(m.votes||0)} 👍</b></div>
           `;
@@ -2704,42 +3899,116 @@ if (boxSetup){
     }
   }
 
-  // player view task
+  // player view task + player submit/vote UI
   if (playerState.joined && st?.roomCode === playerState.roomCode){
-    if (st.task) $("player-task").textContent = st.task;
+    const theme = (typeof st.currentTheme === 'string' && st.currentTheme) ? st.currentTheme : (typeof st.task === 'string' ? st.task : '');
+    if(theme && $("player-task")) $("player-task").textContent = theme;
+
+    // Round label + status text
+    try{
+      const rn = Number(st.roundNumber || 0);
+      const tr = Number(st.totalRounds || 0);
+      if($("player-round-label")) $("player-round-label").textContent = (rn && tr) ? `ROUND ${rn} / ${tr}` : (rn ? `ROUND ${rn}` : 'ROUND — / —');
+    }catch(e){}
+    try{
+      const isCollect = (st.phase === 'collect');
+      const isVote = (st.phase === 'vote');
+      const isFinished = (st.phase === 'finished');
+
+      playerUi.roundActive = !!isCollect;
+      if($("player-task-status")) $("player-task-status").textContent = isCollect ? 'Submit your meme' : 'Waiting for host to start the round';
+
+      // Panels
+      pShow('player-vote-panel', isVote);
+      pShow('player-final-panel', isFinished);
+
+      // Submission only during collect
+      pShow('player-submit-panel', isCollect);
+      pShow('player-waiting', !isCollect && !isVote && !isFinished);
+
+      if(!isCollect){
+        pShow('player-submit-sticky', false);
+      } else {
+        playerUpdateSubmitBtn();
+      }
+    }catch(e){}
+
+    // Timer sync (collect) — centralized via MB:F:PLAYER_TIMER
+    try{ playerTimerSyncFromStatus(st); }catch(e){}
+
+    // [ANCHOR] MB:F:PLAYER_SCORE_INDICATOR_SYNC — keep score indicator visible + in sync
+    try{
+      const ps = Array.isArray(st.players) ? st.players : [];
+      const me = ps.find(x=> String(x.id||'') === String(playerState.playerId||''))
+              || ps.find(x=> String(x.nickname||'') === String(playerState.nickname||''));
+      const myScore = Number(me?.score || 0);
+      const hasPlayers = ps.length > 0;
+
+      if($("player-score-value")) $("player-score-value").textContent = String(myScore);
+
+      // Ensure the score button isn't stuck hidden (regression fix)
+      pShow('player-score-wrap', hasPlayers);
+      pShow('player-score-btn', hasPlayers);
+      if(!hasPlayers) $("player-leaderboard")?.classList.add('hidden');
+
+      // Debug: log score changes (helps validate server scoring during live game)
+      if(hasPlayers && playerLastScore !== myScore){
+        pushDebug('player:score', { score: myScore, playerId: playerState.playerId, nickname: playerState.nickname });
+        playerLastScore = myScore;
+      }
+
+      try{ playerRenderLeaderboard(ps); }catch(e){}
+    }catch(e){}
 
     // Voting finished signal (player)
     if ($("player-vote-finished")){
       if (st.phase === "vote" && st.voteComplete) $("player-vote-finished").classList.remove("hidden");
       else $("player-vote-finished").classList.add("hidden");
     }
+
+    // Keep settings panel status fresh
+    try{ if($("player-settings-status")) $("player-settings-status").textContent = socket.connected ? 'ONLINE' : 'OFFLINE'; }catch(e){}
+    try{ if($("player-settings-room")) $("player-settings-room").textContent = playerState.roomCode || '—'; }catch(e){}
   }
 
   // Legacy: keep TT transforms neutral
   try{ applyTTVars("room-status"); }catch(e){}
 });
 
+
+// [ANCHOR] MB:F:SOCKET:ROUND_TASK — new round payload
 socket.on("round-task", (p) => {
   // reset waiting UI for next round
+  hideWinnerOverlay();
   nextUiDelayDone = false;
   nextUiRoundNumber = 0;
   hostAutoNextLock = false;
+  // [ANCHOR] MB:F:WINNER_NEXT:RESET_LOCAL — reset local vote/ready flags for new round
+  try{ if(playerState){ playerState.hasVotedLocal = false; playerState.readyNextLocal = false; } }catch(e){}
   $("player-next-wrap")?.classList.add("hidden");
   $("host-ready-next")?.classList.add("hidden");
 
-  // Player: reset inputs + clear previous voting grid (so old memes don't stick)
+  // [BUGWATCH] Важно: очищать player-vote и input'ы при каждом новом раунде, иначе остаются мемы прошлого голосования.
+// Player: reset inputs + clear previous voting grid (so old memes don't stick)
   if (playerState.joined && p?.roomCode === playerState.roomCode){
-    $("player-task").textContent = p.task || "—";
-    $("player-sent").classList.add("hidden");
-    $("player-voted").classList.add("hidden");
-    $("player-vote-finished")?.classList.add("hidden");
+    if ($("player-meme-url")) $("player-meme-url").value = "";
+    if ($("player-meme-caption")) $("player-meme-caption").value = "";
+    if ($("player-meme-file")) $("player-meme-file").value = "";
 
-    const vb = $("player-vote");
-    if (vb) vb.innerHTML = "";
+    if ($("player-meme-url-link")) $("player-meme-url-link").value = "";
+    if ($("player-meme-caption-link")) $("player-meme-caption-link").value = "";
+    if ($("player-meme-text")) $("player-meme-text").value = "";
 
-    $("player-meme-url").value = "";
-    $("player-meme-caption").value = "";
-    $("player-meme-file").value = "";
+    pShow("player-caption-wrap", false);
+    pShow("player-caption-wrap-link", false);
+
+    const img1 = $("player-preview");
+    if (img1){ img1.src = ""; img1.classList.add("hidden"); }
+    const img2 = $("player-preview-link");
+    if (img2){ img2.src = ""; img2.classList.add("hidden"); }
+
+    playerSetMemeType(null);
+    pShow("player-sent", false);
   }
 
   // Host: UI hints + switch to Round screen
@@ -2763,7 +4032,10 @@ socket.on("round-task", (p) => {
 
 
 
+
+// [ANCHOR] MB:F:SOCKET:VOTING_STARTED — start vote, sync endsAt
 socket.on("voting-started", ({ roomCode, memes, voteSeconds, voteEndsAt }) => {
+  hideWinnerOverlay();
   // hide next-round UI until voting is finished
   nextUiDelayDone = false;
 
@@ -2802,9 +4074,11 @@ socket.on("voting-started", ({ roomCode, memes, voteSeconds, voteEndsAt }) => {
           if(!res?.ok) return alert(res?.error || "Ошибка");
           $("player-voted").classList.remove("hidden");
           box.querySelectorAll("button").forEach(b=>b.disabled=true);
+        try{ playerState.hasVotedLocal = true; }catch(e){}
+        try{ updateNextRoundUI(); }catch(e){}
         });
       });
-      el.innerHTML = `${renderMediaHTML(m.url)}<div class="cap">${m.caption||""}</div>`;
+      el.innerHTML = `${renderMemeHTML(m)}<div class="cap">${m.caption||""}</div>`;
       el.appendChild(btn);
       box.appendChild(el);
     });
@@ -2815,17 +4089,22 @@ socket.on("voting-started", ({ roomCode, memes, voteSeconds, voteEndsAt }) => {
   }
 });
 
+
+// [ANCHOR] MB:F:SOCKET:VOTING_FINISHED — winners + scoring
 socket.on("voting-finished", (payload = {}) => {
   const roomCode = String(payload.roomCode || "").trim().toUpperCase();
   const roundNumber = Number(payload.roundNumber || 0);
   const myRoom = currentRoom || playerState.roomCode;
   if (!roomCode || roomCode !== myRoom) return;
 
+  const rawDisplayMs = payload.displayMs;
+  const displayMs = (rawDisplayMs === 0 || rawDisplayMs === "0") ? 0 : Number(rawDisplayMs || 3000);
+
   pushDebug("voting-finished", {
     roomCode,
     roundNumber,
     winners: Array.isArray(payload.winners) ? payload.winners.length : (payload.winner ? 1 : 0),
-    displayMs: Number(payload.displayMs || 3000),
+    displayMs,
   });
 
   $("host-vote-finished")?.classList.remove("hidden");
@@ -2838,30 +4117,50 @@ socket.on("voting-finished", (payload = {}) => {
   nextUiRoundNumber = roundNumber || 0;
   hostAutoNextLock = false;
 
-  showWinnerOverlay(payload).then(() => {
-    // After winner overlay: enable "next" UI (keep existing ready system)…
-    nextUiDelayDone = true;
-    updateNextRoundUI();
 
-    // …and auto-start next round (host only)
-    const isHost = (!screens.host.classList.contains("hidden")) && (currentRoom === roomCode);
-    if (!isHost) return;
-    if (hostAutoNextLock) return;
-    hostAutoNextLock = true;
-    setTimeout(() => {
-      $("host-next-round")?.click();
-    }, 80);
-  });
+  // [ANCHOR] MB:F:PLAYER_SCORE_FROM_VOTING_FINISHED — update score immediately (even if room-status is throttled/missed)
+  try{
+    const ps = Array.isArray(payload.players) ? payload.players : null;
+    if(ps && ps.length){
+      // stash into lastRoomStatus so other UI can reuse it
+      try{
+        if(lastRoomStatus && typeof lastRoomStatus === "object") lastRoomStatus.players = ps;
+      }catch(e){}
+
+      const me = ps.find(x=> String(x.id||'') === String(playerState.playerId||''))
+              || ps.find(x=> String(x.nickname||'') === String(playerState.nickname||''));
+      const myScore = Number(me?.score || 0);
+
+      if ($("player-score-value")) $("player-score-value").textContent = String(myScore);
+      pShow('player-score-wrap', true);
+      pShow('player-score-btn', true);
+
+      if(playerLastScore !== myScore){
+        pushDebug('player:score', { score: myScore, playerId: playerState.playerId, nickname: playerState.nickname, via: "voting-finished" });
+        playerLastScore = myScore;
+      }
+
+      try{ playerRenderLeaderboard(ps); }catch(e){}
+    }
+  }catch(e){}
+
+  // Show Winner screen (does not auto-close when displayMs<=0; hides on next round start)
+  showWinnerOverlay(payload);
+
+  // Update next-round UI: players who already voted can press "ready"; host will auto-advance only on all-ready-next.
+  updateNextRoundUI();
 });
+
+// [ANCHOR] MB:F:SOCKET:ALL_READY_NEXT — auto-advance trigger
 socket.on("all-ready-next", ({ roomCode, roundNumber, ready, total }) => {
   const myRoom = currentRoom || playerState.roomCode;
   if (!roomCode || roomCode !== myRoom) return;
   pushDebug("all-ready-next", { roomCode, roundNumber, ready, total });
 
-  const isHost = !screens.host.classList.contains("hidden");
+  const isHost = !!currentRoom;
   if (!isHost) return;
   if (hostAutoNextLock) return;
-  if (!lastRoomStatus || lastRoomStatus.phase !== "vote" || !lastRoomStatus.voteComplete) return;
+  if (!lastRoomStatus || !lastRoomStatus.voteComplete) return;
 
   hostAutoNextLock = true;
   setTimeout(() => {
@@ -2869,6 +4168,8 @@ socket.on("all-ready-next", ({ roomCode, roundNumber, ready, total }) => {
   }, 200);
 });
 
+
+// [ANCHOR] MB:F:SOCKET:GAME_FINISHED
 socket.on("game-finished", ({ roomCode, results }) => {
   const list = Array.isArray(results) ? results : [];
   if (roomCode === currentRoom){
@@ -2877,8 +4178,14 @@ socket.on("game-finished", ({ roomCode, results }) => {
     list.forEach(r=> hostState.scores[r.nickname] = r.score );
     renderResults();
     $("host-start-vote")?.classList.add("hidden");
+
+    // New Host Final Results stage (full-screen)
+    try{ showFinalOverlay(list); }catch(e){}
   }
   if (playerState.joined && roomCode === playerState.roomCode){
+    // [ANCHOR] MB:F:PLAYER_FINAL_SHOW — ensure final winner is visible for players (winner overlay may still be open)
+    try{ showFinalOverlay(list, { mode: "player" }); }catch(e){}
+
     const box = $("player-final");
     box.innerHTML = "";
     if (list.length===0){ box.innerHTML = `<div class="muted">Игра завершена.</div>`; return; }
@@ -2891,6 +4198,8 @@ socket.on("game-finished", ({ roomCode, results }) => {
   }
 });
 
+
+// [ANCHOR] MB:F:SOCKET:ROOM_CLOSED
 socket.on("room-closed", ({ roomCode }) => {
   if (roomCode === currentRoom || roomCode === playerState.roomCode){
     alert("Комната закрыта (ведущий вышел).");
@@ -2905,7 +4214,11 @@ async function loadAppVersion(){
   try{
     const r = await fetch("/api/version", { cache:"no-store" });
     const j = await r.json();
-    if(j && j.version && $("app-version")) $("app-version").textContent = j.version;
+    if(j && j.version){
+      window.__MB_VERSION = j.version;
+      const el = $("app-version");
+      if(el) el.textContent = j.version;
+    }
   }catch(e){}
 }
 loadAppVersion();

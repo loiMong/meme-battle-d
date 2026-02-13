@@ -4,10 +4,28 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Мем-баттл</title>
-  <link rel="stylesheet" href="./style.css"/>
+  <!-- cache-bust (mobile browsers can be aggressive) -->
+  <link rel="stylesheet" href="./style.css?v=0.1.18"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bungee&display=swap" rel="stylesheet">
 </head>
 <body>
+  <!-- ================================================================
+       Meme‑Battle — HTML MAP (быстрые якоря поиска)
+       - [ANCHOR] MB:HTML:SCREEN_MODE
+       - [ANCHOR] MB:HTML:SCREEN_HOST
+       - [ANCHOR] MB:HTML:HOST_VIEW_SETUP / HOST_VIEW_ROUND / HOST_VIEW_VOTING
+       - [ANCHOR] MB:HTML:SCREEN_PLAYER
+       - [ANCHOR] MB:HTML:SCREEN_ADMIN
+       - [ANCHOR] MB:HTML:DEBUG_PANEL
+       - [ANCHOR] MB:HTML:WINNER_OVERLAY
+       ================================================================ -->
+
   <div class="bg"></div>
+
+  <!-- [ANCHOR] MB:HTML:PLAYER_TIMER_PILL — yellow pill timer for player screens -->
+  <div id="player-round-timer" class="hostRoundTimer playerRoundTimer ok hidden" aria-label="Round timer">0</div>
 
   <div class="wrap">
     <header class="header">
@@ -19,22 +37,71 @@
     </header>
 
     <main class="card">
-      <section id="screen-mode" class="screen">
-        <h2 class="modeTitle">Выбери роль</h2>
-
-        <div class="roleGrid" role="group" aria-label="Выбор роли">
-          <button id="btn-mode-host" class="roleCard roleHost" type="button">
-            <div class="roleIcon" aria-hidden="true">🖥️</div>
-            <div class="roleText">HOST</div>
-            <div class="roleSub">Экран для всех</div>
+      <section id="screen-mode" class="screen roleSelectionStage">
+        <div class="roleTopRight">
+          <button id="btn-fullscreen" class="roleFsBtn" type="button" aria-label="Toggle fullscreen" title="Fullscreen">
+            <!-- simple maximize icon -->
+            <svg class="roleFsIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+              <path d="M16 3h3a2 2 0 0 1 2 2v3"/>
+              <path d="M8 21H5a2 2 0 0 1-2-2v-3"/>
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+            </svg>
           </button>
 
-          <button id="btn-mode-player" class="roleCard rolePlayer" type="button">
-            <div class="roleIcon" aria-hidden="true">📱</div>
-            <div class="roleText">PLAYER</div>
-            <div class="roleSub">Телефон</div>
+          <div class="roleLangPill">🌐 EN</div>
+        </div>
+
+        <div class="roleTitleBlock">
+          <div class="roleGameTitle">MEME BATTLE 🔥</div>
+          <div class="roleTitleLine" aria-hidden="true"></div>
+        </div>
+
+        <div class="roleSubtitle">
+          One link — one game. Host on PC, players on phones.
+        </div>
+
+        <div class="roleSectionTitle">Choose your role</div>
+
+        <div class="roleButtons" role="group" aria-label="Choose your role">
+          <button id="btn-mode-host" class="roleBtn roleBtnHost" type="button">
+            <div class="roleBtnPattern roleBtnPatternHost" aria-hidden="true"></div>
+            <div class="roleBtnShine" aria-hidden="true"></div>
+
+            <div class="roleBtnContent">
+              <!-- monitor icon -->
+              <svg class="roleBtnIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <path d="M8 21h8"/>
+                <path d="M12 17v4"/>
+              </svg>
+              <div class="roleBtnLabel">HOST</div>
+            </div>
+
+            <div class="roleBtnCorner roleBtnCornerHost" aria-hidden="true"></div>
+          </button>
+
+          <button id="btn-mode-player" class="roleBtn roleBtnPlayer" type="button">
+            <div class="roleBtnPattern roleBtnPatternPlayer" aria-hidden="true"></div>
+            <div class="roleBtnShine" aria-hidden="true"></div>
+
+            <div class="roleBtnContent">
+              <!-- smartphone icon -->
+              <svg class="roleBtnIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="7" y="2" width="10" height="20" rx="2"/>
+                <path d="M11 18h2"/>
+              </svg>
+              <div class="roleBtnLabel">PLAYER</div>
+            </div>
+
+            <div class="roleBtnCorner roleBtnCornerPlayer" aria-hidden="true"></div>
           </button>
         </div>
+
+        <!-- Decorative elements (hidden on mobile) -->
+        <div class="roleDecor roleDecorCircle" aria-hidden="true"></div>
+        <div class="roleDecor roleDecorSquare" aria-hidden="true"></div>
+        <div class="roleDecor roleDecorDiamond" aria-hidden="true"></div>
 
         <!-- Скрыто для обычных игроков, оставляем доступ через код/отладку -->
         <button id="btn-mode-admin" class="ghost hidden" type="button">Admin (панель)</button>
@@ -225,7 +292,8 @@
   </div>
 
   <!-- HOST: Round (screen 3) -->
-  <div id="host-view-round" class="hostRound hidden">
+    <!-- [ANCHOR] MB:HTML:HOST_VIEW_ROUND -->
+<div id="host-view-round" class="hostRound hidden">
     <div class="hostRoundInner">
       <div class="hostRoundTaskCard">
         <div class="hostRoundTop">
@@ -256,7 +324,8 @@
   </div>
 
   <!-- HOST: Voting (screen 4) -->
-  <div id="host-view-voting" class="hostVoting hidden">
+    <!-- [ANCHOR] MB:HTML:HOST_VIEW_VOTING -->
+<div id="host-view-voting" class="hostVoting hidden">
     <!-- Timer (yellow pill like Task screen) -->
     <div id="host-vote-timer" class="hostRoundTimer ok hostVoteTimerPill" aria-label="Voting timer">
       00:30
@@ -275,6 +344,16 @@
         </div>
       </div>
 
+      <!-- [ANCHOR] MB:HOST_VOTE:MINI_STATUS -->
+      <div class="hostVoteMiniHUD">
+        <div id="host-vote-mini-stats" class="hostVoteMiniStats">—</div>
+        <div class="hostVoteMiniActions">
+          <button id="host-vote-force-next" class="secondary" disabled>Следующий раунд (хост)</button>
+        </div>
+        <div id="host-vote-mini-list" class="hostVoteMiniList"></div>
+      </div>
+
+
       <div id="host-vote-grid" class="hostVoteMasonry"></div>
 
       <div class="hostVoteStatusWrap">
@@ -284,7 +363,8 @@
   </div>
 
   <!-- HOST: Game (old UI preserved) -->
-  <div id="host-view-game" class="hidden">
+    <!-- [ANCHOR] MB:HTML:HOST_VIEW_GAME_OLD -->
+<div id="host-view-game" class="hidden">
     <div class="row">
       <h2>Ведущий</h2>
       <div class="pill" id="host-conn2">offline</div>
@@ -322,66 +402,191 @@
   </div>
 </section>
 
-      <section id="screen-player" class="screen hidden">
-        <div class="row">
-          <h2>Игрок</h2>
-          <div class="pill" id="player-conn">offline</div>
-        </div>
+            <section id="screen-player" class="screen hidden">
+        <!-- [ANCHOR] MB:HTML:PLAYER_ROOT — redesigned player screens (join + submit + vote) -->
+        <div class="playerRoot">
+          <!-- Score indicator (optional; hidden if no players/score) -->
+          <div class="pScoreWrap hidden" id="player-score-wrap">
+            <button id="player-score-btn" class="pScoreBtn" type="button" title="Leaderboard">
+              <span class="pScoreIcon">🏆</span>
+              <span id="player-score-value" class="pScoreValue">0</span>
+            </button>
+            <div id="player-leaderboard" class="pLeaderboard hidden"></div>
+          </div>
 
-        <div class="panel">
-          <label>Код комнаты:
-            <input id="player-room" placeholder="ABCD" autocomplete="off"/>
-          </label>
-          <label>Ник:
-            <input id="player-nick" placeholder="Твой ник" autocomplete="off"/>
-          </label>
-          <button id="player-join" class="primary">Войти</button>
-          <div class="muted" id="player-join-status"></div>
-        </div>
+          <!-- Settings -->
+          <button id="player-settings-btn" class="pSettingsBtn" type="button" title="Settings">⚙️</button>
+          <div id="player-settings-overlay" class="pSettingsOverlay hidden" role="dialog" aria-modal="true">
+            <div class="pSettingsCard">
+              <div class="pSettingsTitle">SETTINGS</div>
+              <div class="pSettingsRow"><span>Status</span><b id="player-settings-status">OFFLINE</b></div>
+              <div class="pSettingsRow"><span>Room</span><b id="player-settings-room">—</b></div>
+              <div class="pSettingsBtns">
+                <button id="player-settings-reconnect" class="primary" type="button">Reconnect</button>
+                <button id="player-settings-close" class="ghost" type="button">Close</button>
+              </div>
 
-        <div class="panel">
-          <h3>Задание</h3>
-          <div id="player-task" class="task">—</div>
-        </div>
+              <!-- Legacy connection pill target (kept for existing logic) -->
+              <div id="player-conn" class="pill hidden">offline</div>
+            </div>
+          </div>
 
-        <div class="panel">
-          <h3>Отправь мем</h3>
-          <label>Ссылка на картинку/GIF:
-            <input id="player-meme-url" placeholder="https://..." autocomplete="off"/>
-          </label>
+          <div class="playerInner">
+            <!-- JOIN VIEW -->
+            <div id="player-view-join" class="pJoinView">
+              <div class="pJoinHeader">
+                <div class="pJoinTitle">Join a room</div>
+                <div class="pJoinSub">Enter the room code from the host screen</div>
+              </div>
 
-          <label>Файл (картинка или GIF):
-            <input id="player-meme-file" type="file" accept="image/*,image/gif"/>
-          </label>
-          <div class="muted">Если выбран файл — ссылка будет игнорироваться. Лимит ~8MB.</div>
+              <div class="pJoinForm">
+                <label class="pLabel" for="player-room">ROOM CODE</label>
+                <div class="pRoomCodeWrap" id="player-room-field">
+                  <input id="player-room" class="pInput pInputCode" maxlength="12" placeholder="Enter room code" autocomplete="off" />
+                  <button id="player-qr-btn" class="pQrBtn" type="button" title="Scan QR code">⌁</button>
+                </div>
+                <div id="player-join-error" class="pError hidden"></div>
+                <div class="pHint">You can scan the QR from the host screen</div>
 
-          <label>Подпись (необязательно):
-            <input id="player-meme-caption" placeholder="..." autocomplete="off"/>
-          </label>
-          <div class="btns">
-            <button id="player-send-meme" class="primary">Отправить</button>
-            <div id="player-sent" class="sent hidden">✅ Мем отправлен</div>
+                <label class="pLabel" for="player-nick">YOUR NAME</label>
+                <input id="player-nick" class="pInput" maxlength="20" placeholder="Your name" autocomplete="off" />
+                <div class="pCount" id="player-nick-count">0/20</div>
+
+                <button id="player-join" class="pJoinBtn hidden" type="button">JOIN ROOM</button>
+                <div class="pJoinStatus" id="player-join-status"></div>
+              </div>
+            </div>
+
+            <!-- GAME VIEW (submit / vote / final) -->
+            <div id="player-view-game" class="pGameView hidden">
+              <!-- sticky timer pill (yellow/orange/red) -->
+              <div class="pTimerDock">
+                <div id="player-timer" class="playerTimerPill hidden">120</div>
+              </div>
+
+              <!-- Task card -->
+              <div class="pTaskCard">
+                <div class="pTaskTop">
+                  <div id="player-round-label" class="pTaskRound">ROUND —</div>
+                  <div id="player-task-status" class="pTaskStatus">Waiting for host to start the round</div>
+                </div>
+                <div id="player-task" class="pTaskTitle">—</div>
+              </div>
+
+              <!-- Waiting dots (when round is not active) -->
+              <div id="player-waiting" class="pWaiting hidden" aria-label="Waiting">
+                <div class="pDot"></div><div class="pDot"></div><div class="pDot"></div>
+              </div>
+
+              <!-- SUBMIT PANEL -->
+              <div id="player-submit-panel" class="pSubmitPanel">
+                <!-- Type chooser -->
+                <div id="player-type-chooser" class="pTypeChooser">
+                  <button id="player-type-file" class="pTypeBtn" type="button">
+                    <div class="pTypeIcon">📎</div>
+                    <div class="pTypeTitle">Attach file</div>
+                    <div class="pTypeDesc">Images · GIFs · Video · Audio (JPG, PNG, GIF, MP4, MP3)</div>
+                  </button>
+                  <button id="player-type-link" class="pTypeBtn" type="button">
+                    <div class="pTypeIcon">🔗</div>
+                    <div class="pTypeTitle">Add link</div>
+                  </button>
+                  <button id="player-type-text" class="pTypeBtn" type="button">
+                    <div class="pTypeIcon">✍️</div>
+                    <div class="pTypeTitle">Text-Only Meme</div>
+                  </button>
+                </div>
+
+                <!-- FILE MODE -->
+                <div id="player-mode-file" class="pMode hidden">
+                  <button class="pBackBtn" id="player-back-file" type="button">← Back</button>
+
+                  <div class="pCard">
+                    <label class="pCardLabel" for="player-meme-url">File URL</label>
+                    <input id="player-meme-url" class="pCardInput" placeholder="https://..." autocomplete="off" />
+                    <div class="pCardHint">Images · GIFs · Video · Audio (JPG, PNG, GIF, MP4, MP3)</div>
+
+                    <label class="pCardLabel" for="player-meme-file" style="margin-top:14px">Attach file</label>
+                    <input id="player-meme-file" class="pCardInput" type="file" accept="image/*,image/gif,video/*,audio/*" />
+                    <div class="pCardHint">If file selected — URL will be ignored. Limit ~8MB.</div>
+
+                    <img id="player-preview" class="pPreview hidden" alt="Preview" />
+                  </div>
+
+                  <div id="player-caption-wrap" class="pCard pCaptionWrap hidden">
+                    <label class="pCaptionLabel" for="player-meme-caption">Add caption / comment (optional)</label>
+                    <textarea id="player-meme-caption" class="pCaptionInput" rows="3" placeholder="Add a funny caption..."></textarea>
+                  </div>
+                </div>
+
+                <!-- LINK MODE -->
+                <div id="player-mode-link" class="pMode hidden">
+                  <button class="pBackBtn" id="player-back-link" type="button">← Back</button>
+
+                  <div class="pCard">
+                    <label class="pCardLabel" for="player-meme-url-link">Paste Link</label>
+                    <input id="player-meme-url-link" class="pCardInput" placeholder="https://..." autocomplete="off" />
+                    <div class="pCardHint">Direct links to images, GIFs or videos (TikTok, Imgur, Giphy, etc.)</div>
+
+                    <img id="player-preview-link" class="pPreview hidden" alt="Preview" />
+                  </div>
+
+                  <div id="player-caption-wrap-link" class="pCard pCaptionWrap hidden">
+                    <label class="pCaptionLabel" for="player-meme-caption-link">Add caption / comment (optional)</label>
+                    <textarea id="player-meme-caption-link" class="pCaptionInput" rows="3" placeholder="Add a funny caption..."></textarea>
+                  </div>
+                </div>
+
+                <!-- TEXT MODE (NO COMMENT) -->
+                <div id="player-mode-text" class="pMode hidden">
+                  <button class="pBackBtn" id="player-back-text" type="button">← Back</button>
+
+                  <div class="pCard">
+                    <label class="pCardLabel" for="player-meme-text">Your Text Meme</label>
+                    <textarea id="player-meme-text" class="pCardInput" rows="8" placeholder="Type your meme text here..."></textarea>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Sticky submit -->
+              <div id="player-submit-sticky" class="pSubmitSticky hidden">
+                <button id="player-send-meme" class="pSubmitBtn" type="button" disabled>SUBMIT MEME</button>
+                <div id="player-sent" class="pSent hidden">✅ Meme sent</div>
+              </div>
+
+              <!-- VOTE PANEL -->
+              <div id="player-vote-panel" class="pVotePanel hidden">
+                <div id="player-vote" class="memes"></div>
+                <div id="player-voted" class="pSent hidden">✅ Vote counted</div>
+                <div id="player-vote-finished" class="pSent hidden">✅ Voting finished</div>
+                <div id="player-next-wrap" class="pNextWrap hidden">
+                  <button id="player-next-round" class="pSubmitBtn" type="button">READY</button>
+                  <div id="player-next-wait" class="muted"></div>
+                </div>
+              </div>
+
+              <!-- FINAL PANEL -->
+              <div id="player-final-panel" class="pFinalPanel hidden">
+                <div id="player-final" class="results"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- QR overlay (mock) -->
+          <div id="player-qr-overlay" class="pQrOverlay hidden">
+            <div class="pQrCard">
+              <div class="pQrBox">
+                <div class="pQrBoxText">Camera scanning...</div>
+              </div>
+              <div class="pQrInstr">Point camera at QR code</div>
+              <button id="player-qr-cancel" class="pQrCancel" type="button">Cancel</button>
+            </div>
           </div>
         </div>
 
-        <div class="panel">
-          <h3>Голосование</h3>
-          <div id="player-vote" class="memes"></div>
-          <div id="player-voted" class="sent hidden">✅ Голос учтён</div>
-          <div id="player-vote-finished" class="sent hidden">✅ Голосование завершено</div>
-          <div id="player-next-wrap" class="sent hidden">
-            <button id="player-next-round" class="primary">Следующий раунд</button>
-            <div id="player-next-wait" class="muted"></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h3>Финал</h3>
-          <div id="player-final" class="results"></div>
-        </div>
       </section>
-    
-      <section id="screen-admin" class="screen hidden">
+
+<section id="screen-admin" class="screen hidden">
         <div class="row">
           <h2>Админ</h2>
           <div class="pill" id="admin-conn">offline</div>
@@ -672,10 +877,26 @@
       <b>DEBUG</b>
       <div class="debug-actions">
         <button id="debug-copy" class="ghost">Copy</button>
+      <button id="debug-download" class="ghost" title="Скачать JSON">⬇️</button>
         <button id="debug-clear" class="ghost">Clear</button>
       </div>
       <button id="debug-close" class="ghost">×</button>
     </div>
+
+    <!-- [ANCHOR] MB:DEBUG:PANEL_CONTROLS -->
+    <div class="debug-sub">
+      <label class="dbgchk">
+        <input type="checkbox" id="debug-enabled" checked>
+        <span>DEBUG</span>
+      </label>
+      <div id="debug-room-state" class="muted">Room debug: —</div>
+      <div class="debug-sub-actions">
+        <button id="debug-snapshot" class="ghost" title="Fetch server timeline snapshot">Snapshot</button>
+        <button id="debug-tl-clear" class="ghost" title="Clear server timeline">Clear TL</button>
+      </div>
+    </div>
+    <div id="debug-timeline" class="debug-timeline"></div>
+
     <div id="debug-body" class="debug-body"></div>
   </div>
 
@@ -696,7 +917,7 @@
 
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="./script.js"></script>
+  <script src="./script.js?v=0.1.18"></script>
   <div id="winner-overlay" class="overlay hidden wsStage" aria-hidden="true">
     <!-- Background rotating shapes (20% opacity) -->
     <div class="wsBg" aria-hidden="true">
@@ -718,6 +939,69 @@
       <div id="winner-emoji" class="wsEmoji">🏆</div>
 
       <div id="winner-cards" class="wsCards"></div>
+
+      <!-- [ANCHOR] MB:WINNER:PLAYER_CONTROLS -->
+      <div id="winner-player-controls" class="wsPlayerControls hidden">
+        <button id="winner-player-next-round" class="primary wsPlayerBtn">Готов</button>
+        <div id="winner-player-next-wait" class="wsPlayerWait muted"></div>
+      </div>
+
+      <!-- [ANCHOR] MB:WINNER:HOST_CONTROLS -->
+      <div id="winner-host-controls" class="wsHostControls hidden">
+        <div id="winner-host-mini-stats" class="wsHostMiniStats"></div>
+        <button id="winner-host-next-round" class="primary wsHostBtn">Следующий раунд (хост)</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- [ANCHOR] MB:HTML:FINAL_OVERLAY -->
+  <div id="final-overlay" class="overlay hidden fsStage" aria-hidden="true">
+    <!-- Decorative background elements -->
+    <div class="fsDeco" aria-hidden="true">
+      <div class="fsDecoCircle"></div>
+      <div class="fsDecoSquare"></div>
+    </div>
+
+    <!-- Host action -->
+    <button id="final-host-new-game" class="secondary fsNewGameBtn" type="button">Новая игра</button>
+
+    <div class="fsWrap">
+      <!-- Header -->
+      <div class="fsHeader">
+        <div class="fsTitle">FINAL RESULTS</div>
+        <div class="fsLine"></div>
+      </div>
+
+      <!-- Main grid -->
+      <div class="fsGrid">
+        <!-- Left: Champion -->
+        <div class="fsLeft">
+          <div class="fsWinnerWrap">
+            <div class="fsSpotlight" aria-hidden="true"></div>
+
+            <div class="fsFrame">
+              <div class="fsCard">
+                <div id="final-crown" class="fsCrown" aria-hidden="true">👑</div>
+                <div class="fsChampion">CHAMPION</div>
+                <div id="final-winner-name" class="fsWinnerName">—</div>
+                <div class="fsPts"><span id="final-winner-score">0</span> PTS</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Leaderboard -->
+        <div class="fsRight">
+          <div class="fsTopTitle">TOP 3</div>
+          <div id="final-top3" class="fsTop3"></div>
+
+          <div id="final-rest-wrap" class="fsRestWrap hidden">
+            <div class="fsOtherTitle">OTHER PLAYERS</div>
+            <div id="final-rest" class="fsRest"></div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
