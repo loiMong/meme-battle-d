@@ -57,12 +57,7 @@ function createRoom(hostId) {
     task: "",
     locked: false,       // block new nicknames when game started
     memesRevealed: false,
-    voteComplete: false,
-    voteSeconds: 0,
-    voteStartAt: 0,
-    voteEndsAt: 0,
-    voteTimer: null,
-        playersById: Object.create(null),
+    playersById: Object.create(null),
     nickIndex: Object.create(null),
     socketToPlayerId: Object.create(null),
     memes: [],           // {id,url,caption,ownerId,nickname,votes}
@@ -81,9 +76,6 @@ function playersArray(room) {
     connected: !!p.connected,
     hasMeme: !!p.hasMeme,
     hasVoted: !!p.hasVoted,
-    missedVote: !!p.missedVote,
-    readyNext: !!p.readyNext,
-    score: Number(p.score||0),
   }));
 }
 function publicMemes(room) {
@@ -93,7 +85,6 @@ function publicMemes(room) {
 }
 function broadcast(room) {
   io.to(room.code).emit("room-status", {
-    serverNow: Date.now(),
     roomCode: room.code,
     phase: room.phase,
     roundNumber: room.roundNumber,
@@ -103,11 +94,6 @@ function broadcast(room) {
     memesCount: room.memes.length,
     players: playersArray(room),
     memes: publicMemes(room),
-  });
-    voteComplete: !!room.voteComplete,
-    voteSeconds: Number(room.voteSeconds||0),
-    voteStartAt: Number(room.voteStartAt||0),
-    voteEndsAt: Number(room.voteEndsAt||0),
   });
 }
 function ensureHost(room, socket, cb) {
@@ -127,140 +113,6 @@ function checkAllMemesReady(room) {
   if (active.length === 0) return false;
   return active.every(p => p.hasMeme);
 }
-
-// [ANCHOR] MB:S:VOTING_CORE — minimal vote timer + finalize + next-round readiness
-function clearVoteTimer(room){
-  if(room && room.voteTimer){
-    clearTimeout(room.voteTimer);
-    room.voteTimer = null;
-  }
-}
-function computeVoteSeconds(room){
-  const memesCount = Array.isArray(room?.memes) ? room.memes.length : 0;
-  // simple rule: 10s per meme, min 15s, max 180s
-  const total = Math.max(15, Math.min(180, memesCount * 10));
-  return total;
-}
-function startVoting(room){
-  if(!room) return;
-  if(room.phase === "vote" && !room.voteComplete) return;
-
-  room.phase = "vote";
-  room.memesRevealed = true;
-  room.voteComplete = false;
-
-  // reset player flags for voting
-  Object.values(room.playersById).forEach(p=>{
-    if(!p.connected) return;
-    p.hasVoted = false;
-    p.missedVote = false;
-    p.readyNext = false;
-  });
-
-  // ensure votes numbers
-  room.memes = (room.memes || []).map(m => ({ ...m, votes: Number(m.votes || 0) }));
-
-  room.voteSeconds = computeVoteSeconds(room);
-  room.voteStartAt = Date.now();
-  room.voteEndsAt = room.voteStartAt + room.voteSeconds * 1000;
-
-  io.to(room.code).emit("voting-started", {
-    roomCode: room.code,
-    memes: room.memes,
-    voteSeconds: room.voteSeconds,
-    voteStartAt: room.voteStartAt,
-    voteEndsAt: room.voteEndsAt,
-    serverNow: Date.now(),
-  });
-
-  broadcast(room);
-
-  clearVoteTimer(room);
-  room.voteTimer = setTimeout(()=>{
-    const r = getRoom(room.code);
-    if(!r) return;
-    if(r.phase !== "vote" || r.voteComplete) return;
-    finalizeVoting(r, "timer");
-  }, room.voteSeconds * 1000 + 300); // small grace
-}
-
-function finalizeVoting(room, reason="unknown"){
-  if(!room || room.voteComplete) return;
-  room.voteComplete = true;
-
-  clearVoteTimer(room);
-
-  // mark missedVote for connected players that didn't vote
-  Object.values(room.playersById).forEach(p=>{
-    if(!p.connected) return;
-    if(!p.hasVoted) p.missedVote = true;
-  });
-
-  const memes = Array.isArray(room.memes) ? room.memes : [];
-  let maxVotes = 0;
-  memes.forEach(m=>{ maxVotes = Math.max(maxVotes, Number(m.votes||0)); });
-  const winners = memes.filter(m => Number(m.votes||0) === maxVotes && maxVotes>0);
-  const winner = winners[0] || null;
-
-  // scoring: 10 pts per vote, +20% bonus to unique winner
-  const pointsByPlayerId = Object.create(null);
-  for(const m of memes){
-    const ownerId = m?.ownerId ? String(m.ownerId) : "";
-    if(!ownerId) continue;
-    const pts = (Number(m.votes||0) * 10) || 0;
-    if(pts) pointsByPlayerId[ownerId] = (pointsByPlayerId[ownerId]||0) + pts;
-  }
-  if(winners.length === 1 && winner){
-    const ownerId = winner?.ownerId ? String(winner.ownerId) : "";
-    const base = (Number(winner.votes||0) * 10) || 0;
-    const bonus = Math.round(base * 0.2);
-    if(ownerId && bonus) pointsByPlayerId[ownerId] = (pointsByPlayerId[ownerId]||0) + bonus;
-  }
-  Object.entries(pointsByPlayerId).forEach(([pid, pts])=>{
-    const pl = room.playersById[pid];
-    if(pl) pl.score = Number(pl.score||0) + (Number(pts)||0);
-  });
-
-  room.updatedAt = Date.now();
-
-  broadcast(room);
-
-  io.to(room.code).emit("voting-finished", {
-    roomCode: room.code,
-    roundNumber: room.roundNumber,
-    totalRounds: room.totalRounds || 0,
-    winner,
-    winners,
-    maxVotes,
-    players: playersArray(room),
-    pointsByPlayerId,
-    tie: winners.length > 1,
-    reason,
-  });
-
-  maybeEmitAllReadyNext(room);
-}
-
-function maybeFinishVoting(room){
-  if(!room || room.phase !== "vote" || room.voteComplete) return;
-  const connected = Object.values(room.playersById).filter(p=>p.connected);
-  if(connected.length === 0) return;
-  const voted = connected.filter(p=>p.hasVoted);
-  if(voted.length === connected.length){
-    finalizeVoting(room, "all_voted");
-  }
-}
-
-function maybeEmitAllReadyNext(room){
-  if(!room || !room.voteComplete) return;
-  const connected = Object.values(room.playersById).filter(p=>p.connected);
-  if(connected.length === 0) return;
-  const ready = connected.filter(p=>p.readyNext);
-  if(ready.length === connected.length){
-    io.to(room.code).emit("all-ready-next", { roomCode: room.code, roundNumber: room.roundNumber });
-  }
-}
-
 
 io.on("connection", (socket) => {
   socket.on("host-create-room", (cb) => {
@@ -308,8 +160,16 @@ io.on("connection", (socket) => {
       if (!ensureHost(room, socket, cb)) return;
       if (room.phase !== "collect") return cbErr(cb, "E_WRONG_PHASE", "Голосование можно начать только во время сбора мемов");
 
-      startVoting(room);
+      room.memesRevealed = true;  // reveal memes to host & players
+      room.phase = "vote";
+      room.updatedAt = Date.now();
+
+      // ensure votes numbers
+      room.memes = room.memes.map(m => ({ ...m, votes: Number(m.votes || 0) }));
+
+      io.to(room.code).emit("voting-started", { roomCode: room.code, memes: room.memes });
       cbOk(cb);
+      broadcast(room);
     }catch{
       cbErr(cb, "E_START_VOTE", "Ошибка запуска голосования");
     }
