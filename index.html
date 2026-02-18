@@ -4,1006 +4,150 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Мем-баттл</title>
-  <!-- cache-bust (mobile browsers can be aggressive) -->
-  <link rel="stylesheet" href="./style.css?v=0.1.18"/>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Bungee&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css"/>
 </head>
 <body>
-  <!-- ================================================================
-       Meme‑Battle — HTML MAP (быстрые якоря поиска)
-       - [ANCHOR] MB:HTML:SCREEN_MODE
-       - [ANCHOR] MB:HTML:SCREEN_HOST
-       - [ANCHOR] MB:HTML:HOST_VIEW_SETUP / HOST_VIEW_ROUND / HOST_VIEW_VOTING
-       - [ANCHOR] MB:HTML:SCREEN_PLAYER
-       - [ANCHOR] MB:HTML:SCREEN_ADMIN
-       - [ANCHOR] MB:HTML:DEBUG_PANEL
-       - [ANCHOR] MB:HTML:WINNER_OVERLAY
-       ================================================================ -->
-
   <div class="bg"></div>
-
-  <!-- [ANCHOR] MB:HTML:PLAYER_TIMER_PILL — yellow pill timer for player screens -->
-  <div id="player-round-timer" class="hostRoundTimer playerRoundTimer ok hidden" aria-label="Round timer">0</div>
 
   <div class="wrap">
     <header class="header">
-      <div class="row headerRow">
-        <h1>Мем-баттл</h1>
-        <div class="pill" id="app-version">beta</div>
-      </div>
+      <h1>Мем-баттл</h1>
       <p class="sub">Одна ссылка — и сервер, и фронт. Ведущий на ПК, игроки на телефонах.</p>
     </header>
 
     <main class="card">
-      <section id="screen-mode" class="screen roleSelectionStage">
-        <div class="roleTopRight">
-          <button id="btn-fullscreen" class="roleFsBtn" type="button" aria-label="Toggle fullscreen" title="Fullscreen">
-            <!-- simple maximize icon -->
-            <svg class="roleFsIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
-              <path d="M16 3h3a2 2 0 0 1 2 2v3"/>
-              <path d="M8 21H5a2 2 0 0 1-2-2v-3"/>
-              <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
-            </svg>
-          </button>
-
-          <div class="roleLangPill">🌐 EN</div>
+      <section id="screen-mode" class="screen">
+        <h2>Выбери режим</h2>
+        <div class="btns">
+          <button id="btn-mode-host" class="primary">Я ведущий (экран для всех)</button>
+          <button id="btn-mode-player" class="secondary">Я игрок (телефон)</button>
         </div>
-
-        <div class="roleTitleBlock">
-          <div class="roleGameTitle">MEME BATTLE 🔥</div>
-          <div class="roleTitleLine" aria-hidden="true"></div>
-        </div>
-
-        <div class="roleSubtitle">
-          One link — one game. Host on PC, players on phones.
-        </div>
-
-        <div class="roleSectionTitle">Choose your role</div>
-
-        <div class="roleButtons" role="group" aria-label="Choose your role">
-          <button id="btn-mode-host" class="roleBtn roleBtnHost" type="button">
-            <div class="roleBtnPattern roleBtnPatternHost" aria-hidden="true"></div>
-            <div class="roleBtnShine" aria-hidden="true"></div>
-
-            <div class="roleBtnContent">
-              <!-- monitor icon -->
-              <svg class="roleBtnIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="2" y="3" width="20" height="14" rx="2"/>
-                <path d="M8 21h8"/>
-                <path d="M12 17v4"/>
-              </svg>
-              <div class="roleBtnLabel">HOST</div>
-            </div>
-
-            <div class="roleBtnCorner roleBtnCornerHost" aria-hidden="true"></div>
-          </button>
-
-          <button id="btn-mode-player" class="roleBtn roleBtnPlayer" type="button">
-            <div class="roleBtnPattern roleBtnPatternPlayer" aria-hidden="true"></div>
-            <div class="roleBtnShine" aria-hidden="true"></div>
-
-            <div class="roleBtnContent">
-              <!-- smartphone icon -->
-              <svg class="roleBtnIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="7" y="2" width="10" height="20" rx="2"/>
-                <path d="M11 18h2"/>
-              </svg>
-              <div class="roleBtnLabel">PLAYER</div>
-            </div>
-
-            <div class="roleBtnCorner roleBtnCornerPlayer" aria-hidden="true"></div>
-          </button>
-        </div>
-
-        <!-- Decorative elements (hidden on mobile) -->
-        <div class="roleDecor roleDecorCircle" aria-hidden="true"></div>
-        <div class="roleDecor roleDecorSquare" aria-hidden="true"></div>
-        <div class="roleDecor roleDecorDiamond" aria-hidden="true"></div>
-
-        <!-- Скрыто для обычных игроков, оставляем доступ через код/отладку -->
-        <button id="btn-mode-admin" class="ghost hidden" type="button">Admin (панель)</button>
+        <p class="hint">Диагностика: кнопка <b>DEBUG</b> внизу справа или <code>?debug=1</code> в URL.</p>
       </section>
 
       <section id="screen-host" class="screen hidden">
-  <!-- HOST: Setup (screen 2) -->
-  <div id="host-view-setup" class="hostSetup">
-    <div class="hostSetupHeader">
-      <div class="hostBadgeWrap">
-        <div class="hostBadge">HOST</div>
-        <div class="hostOnline">
-          <span class="wifiDot" aria-hidden="true"></span>
-          <span class="hostOnlineText">Online</span>
-        </div>
-      </div>
-      <div class="pill" id="host-conn">offline</div>
-    </div>
-
-    <div class="hostSetupGrid">
-      <!-- LEFT -->
-      <div class="hostSetupCol">
-        <div id="host-room-pre" class="panel setupPanel">
-          <button id="host-create-room" class="createBig" type="button">CREATE ROOM</button>
-        </div>
-
-        <div id="host-setup-steps" class="panel setupPanel stepsPanel">
-          <div class="stepsList">
-            <div class="stepRow"><span class="stepBadge">1</span><span>Create a room</span></div>
-            <div class="stepRow"><span class="stepBadge">2</span><span>Invite friends</span></div>
-            <div class="stepRow"><span class="stepBadge">3</span><span>Choose number of rounds</span></div>
-            <div class="stepRow"><span class="stepBadge">4</span><span>Pick themes and start the game</span></div>
-          </div>
-        </div>
-
-        <div id="host-room-post" class="hidden">
-          <div class="panel setupPanel roomCodePanel">
-            <div class="muted tinyUpper">Room Code</div>
-            <div class="roomCodeRow">
-              <div class="roomCodeBig" id="host-room-code">—</div>
-              <button id="host-copy-code" class="ghost copyMini" type="button" title="Copy">Copy</button>
-            </div>
-          </div>
-
-          <div class="panel setupPanel joinPanel">
-            <div class="grid2 joinGrid">
-              <div>
-                <div class="muted tinyUpper">Join Link</div>
-                <div class="copyLine">
-                  <input id="host-room-link-input" class="monoInput" type="text" readonly value=""/>
-                  <button id="host-copy-link" class="secondary copyMini" type="button">Copy</button>
-                </div>
-
-                <!-- keep legacy link field for compatibility -->
-                <div class="muted hidden" id="host-room-link"></div>
-
-                <div class="muted tinyUpper" style="margin-top:12px">Connected Players</div>
-                <div id="host-players-setup" class="list"></div>
-                <div class="muted" id="host-players-hint">Players can scan to join</div>
-              </div>
-
-              <div class="qrSide">
-                <div class="muted tinyUpper">QR Code</div>
-                <div class="qrCard">
-                  <img id="host-qr-img" alt="QR" class="qrimg" />
-                  <button id="host-qr-full" class="qrMax" type="button" disabled title="Full screen">⤢</button>
-                </div>
-                <div class="muted qrhint">Scan to join: <span id="host-room-code-mini">—</span></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- RIGHT -->
-      <div class="hostSetupCol">
-        <div class="panel setupPanel gameSetupPanel">
-          <div class="row" style="justify-content:space-between; align-items:flex-end">
-            <div>
-              <div class="setupTitle">Game Setup</div>
-              <div class="muted">Configure your game</div>
-            </div>
-          </div>
-
-          <div class="setupSection">
-            <div class="row" style="justify-content:space-between; gap:12px; flex-wrap:wrap">
-              <label class="inlineLabel">Number of Rounds</label>
-              <input id="host-total-rounds" class="smallNum" type="number" min="1" max="20" value="5"/>
-            </div>
-            <input id="host-total-rounds-range" type="range" min="1" max="20" step="1" value="5" />
-          </div>
-
-          <div class="setupSection">
-            <div class="row" style="justify-content:space-between">
-              <div class="row" style="gap:10px">
-                <label class="inlineLabel" style="margin:0">Enable AI Tasks</label>
-                <div class="pill" id="ai-status">выкл</div>
-              </div>
-
-              <label class="switch" style="margin:0">
-                <input id="ai-enabled" type="checkbox" />
-                <span class="sw"></span>
-              </label>
-            </div>
-
-            <div id="ai-controls" class="aiControls hidden">
-              <div class="setupSubSection">
-                <div class="row" style="justify-content:space-between; gap:12px">
-                  <label class="inlineLabel" style="margin:0">Absurdity / Humor Level</label>
-                  <div class="absVal"><span id="ai-absurdity-val">50%</span></div>
-                </div>
-                <input id="ai-absurdity" type="range" min="0" max="100" step="5" value="50" />
-                <div class="muted">Higher = more chaotic and silly tasks</div>
-
-                <!-- hidden legacy select; JS maps slider -> this value -->
-                <select id="ai-level" class="hidden" aria-hidden="true">
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="3" selected>3</option>
-                  <option value="4">4</option>
-                  <option value="5">5</option>
-                </select>
-              </div>
-
-              <div class="setupSubSection">
-                <div class="row" style="justify-content:space-between; gap:10px; align-items:center">
-                  <label class="inlineLabel" style="margin:0">Themes</label>
-                  <div class="muted">Selected: <b id="ai-themes-count">0</b>/<b id="ai-themes-limit">5</b></div>
-                </div>
-
-                <div class="themesSelected">
-                  <div id="ai-selected" class="themesSelectedInner"></div>
-                  <div id="ai-no-themes" class="muted">No themes selected</div>
-                </div>
-
-                <button id="ai-browse-btn" class="ghost browseBtn" type="button">
-                  Browse themes <span id="ai-browse-chev" class="chev">▾</span>
-                </button>
-
-                <div id="ai-browse-panel" class="browsePanel hidden">
-                  <div class="searchLine">
-                    <span class="searchIcon" aria-hidden="true">🔎</span>
-                    <input id="ai-theme-search" type="text" placeholder="Search themes..." />
-                  </div>
-                  <div id="ai-themes" class="themeGrid"></div>
-                  <div id="ai-themes-empty" class="muted hidden" style="margin-top:8px">No themes found</div>
-                  <div class="muted" style="margin-top:8px">Select themes for AI-generated tasks</div>
-                </div>
-
-                <!-- optional legacy controls (hidden) -->
-                <input id="ai-custom-theme" class="hidden" aria-hidden="true" type="text" />
-                <button id="ai-add-theme" class="hidden" aria-hidden="true" type="button"></button>
-                <button id="ai-clear-themes" class="hidden" aria-hidden="true" type="button"></button>
-                <button id="ai-random-themes" class="hidden" aria-hidden="true" type="button"></button>
-              </div>
-
-              <div class="setupSubSection">
-                <label class="inlineLabel">Custom Prompt / Tasks</label>
-                <div class="copyLine">
-                  <textarea id="setup-custom-input" rows="1" placeholder="e.g., 'Medieval Fantasy' or custom task"></textarea>
-                  <button id="setup-custom-add" class="secondary copyMini" type="button" disabled>＋</button>
-                </div>
-                <div class="muted">Press Enter or click Add to include a custom task</div>
-
-                <div id="setup-custom-list" class="customList"></div>
-
-                <!-- hidden legacy tasks textarea used by the game -->
-                <textarea id="host-tasks" class="hidden" rows="6"></textarea>
-              </div>
-
-              <div class="setupSubSection">
-                <div class="btns" style="gap:10px; flex-wrap:wrap">
-                  <button id="ai-generate" class="primary" type="button" disabled>Generate Tasks</button>
-                  <button id="ai-to-textarea" class="secondary hidden" type="button" disabled>Показать в поле заданий</button>
-                </div>
-                <div class="muted" id="ai-usage"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Bottom start button -->
-    <div class="hostSetupBottom">
-      <button id="host-start-game" class="startBig" type="button" disabled>START GAME</button>
-    </div>
-  </div>
-
-  <!-- HOST: Round (screen 3) -->
-    <!-- [ANCHOR] MB:HTML:HOST_VIEW_ROUND -->
-<div id="host-view-round" class="hostRound hidden">
-    <div class="hostRoundInner">
-      <div class="hostRoundTaskCard">
-        <div class="hostRoundTop">
-          <div id="host-round-indicator" class="hostRoundIndicator">ROUND 1 / 5</div>
-          <div id="host-round-timer" class="hostRoundTimer ok">01:00</div>
-        </div>
-        <div id="host-round-wait" class="hostRoundWait hidden">Waiting for other players…</div>
-        <div id="host-round-theme" class="hostRoundTheme">—</div>
-      </div>
-
-      <div class="hostRoundProg">
-        <div class="hostRoundProgTitle">SUBMISSIONS</div>
-        <div class="hostRoundProgRow">
-          <div class="hostRoundStat sent"><span class="dot green"></span><span>Sent: <b id="host-round-sent">0</b></span></div>
-          <div class="hostRoundSep"></div>
-          <div class="hostRoundStat miss"><span class="dot yellow pulse"></span><span>Missing: <b id="host-round-missing">0</b></span></div>
-        </div>
-        <div class="hostRoundBar"><div id="host-round-bar" class="hostRoundBarFill" style="width:0%"></div></div>
-        <div id="host-round-total" class="hostRoundTotal">0/0 total</div>
-      </div>
-    </div>
-
-    <!-- Decorative shapes (desktop only) -->
-    <div class="hostRoundDeco decoTL"></div>
-    <div class="hostRoundDeco decoBR"></div>
-    <div class="hostRoundDeco decoML"></div>
-    <div class="hostRoundDeco decoMR"></div>
-  </div>
-
-  <!-- HOST: Voting (screen 4) -->
-    <!-- [ANCHOR] MB:HTML:HOST_VIEW_VOTING -->
-<div id="host-view-voting" class="hostVoting hidden">
-    <!-- Timer (yellow pill like Task screen) -->
-    <div id="host-vote-timer" class="hostRoundTimer ok hostVoteTimerPill" aria-label="Voting timer">
-      00:30
-    </div>
-
-    <!-- Scrollable content (auto-scroll enabled when needed) -->
-    <div id="host-vote-scroll" class="hostVoteScroll">
-      <div class="hostVoteTop">
-        <div id="host-vote-title" class="hostVoteTitle">VOTING TIME</div>
-      </div>
-
-      <div class="hostVoteThemeBlock">
-        <div class="hostVoteThemeLabel">THEME</div>
-        <div class="hostVoteThemeCard">
-          <div id="host-vote-theme" class="hostVoteThemeText">—</div>
-        </div>
-      </div>
-
-      <!-- [ANCHOR] MB:HOST_VOTE:MINI_STATUS -->
-      <div class="hostVoteMiniHUD">
-        <div id="host-vote-mini-stats" class="hostVoteMiniStats">—</div>
-        <div class="hostVoteMiniActions">
-          <button id="host-vote-force-next" class="secondary" disabled>Следующий раунд (хост)</button>
-        </div>
-        <div id="host-vote-mini-list" class="hostVoteMiniList"></div>
-      </div>
-
-
-      <div id="host-vote-grid" class="hostVoteMasonry"></div>
-
-      <div class="hostVoteStatusWrap">
-        <div id="host-vote-status" class="hostVoteStatus">Voting in progress...</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- HOST: Game (old UI preserved) -->
-    <!-- [ANCHOR] MB:HTML:HOST_VIEW_GAME_OLD -->
-<div id="host-view-game" class="hidden">
-    <div class="row">
-      <h2>Ведущий</h2>
-      <div class="pill" id="host-conn2">offline</div>
-    </div>
-
-    <div class="panel">
-      <div class="btns">
-        <button id="host-next-round" class="secondary" disabled>Следующий раунд</button>
-        <button id="host-start-vote" class="secondary" disabled>Начать голосование</button>
-        <button id="host-end-game" class="danger" disabled>Завершить игру</button>
-        <button id="host-new-game" class="secondary hidden">Новая игра</button>
-      </div>
-      <div class="muted" id="host-round-info">Раунд: —</div>
-    </div>
-
-    <div class="grid2">
-      <div class="panel">
-        <h3>Игроки</h3>
-        <div id="host-players" class="list"></div>
-      </div>
-
-      <div class="panel">
-        <h3>Мемы раунда</h3>
-        <div id="host-memes" class="memes"></div>
-        <div class="muted" id="host-phase">Фаза: —</div>
-        <div id="host-vote-finished" class="sent hidden">✅ Голосование завершено</div>
-        <div id="host-ready-next" class="muted hidden">Готовы к следующему раунду: 0/0</div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h3>Результаты</h3>
-      <div id="host-results" class="results"></div>
-    </div>
-  </div>
-</section>
-
-            <section id="screen-player" class="screen hidden">
-        <!-- [ANCHOR] MB:HTML:PLAYER_ROOT — redesigned player screens (join + submit + vote) -->
-        <div class="playerRoot">
-          <!-- Score indicator (optional; hidden if no players/score) -->
-          <div class="pScoreWrap hidden" id="player-score-wrap">
-            <button id="player-score-btn" class="pScoreBtn" type="button" title="Leaderboard">
-              <span class="pScoreIcon">🏆</span>
-              <span id="player-score-value" class="pScoreValue">0</span>
-            </button>
-            <div id="player-leaderboard" class="pLeaderboard hidden"></div>
-          </div>
-
-          <!-- Settings -->
-          <button id="player-settings-btn" class="pSettingsBtn" type="button" title="Settings">⚙️</button>
-          <div id="player-settings-overlay" class="pSettingsOverlay hidden" role="dialog" aria-modal="true">
-            <div class="pSettingsCard">
-              <div class="pSettingsTitle">SETTINGS</div>
-              <div class="pSettingsRow"><span>Status</span><b id="player-settings-status">OFFLINE</b></div>
-              <div class="pSettingsRow"><span>Room</span><b id="player-settings-room">—</b></div>
-              <div class="pSettingsBtns">
-                <button id="player-settings-reconnect" class="primary" type="button">Reconnect</button>
-                <button id="player-settings-close" class="ghost" type="button">Close</button>
-              </div>
-
-              <!-- Legacy connection pill target (kept for existing logic) -->
-              <div id="player-conn" class="pill hidden">offline</div>
-            </div>
-          </div>
-
-          <div class="playerInner">
-            <!-- JOIN VIEW -->
-            <div id="player-view-join" class="pJoinView">
-              <div class="pJoinHeader">
-                <div class="pJoinTitle">Join a room</div>
-                <div class="pJoinSub">Enter the room code from the host screen</div>
-              </div>
-
-              <div class="pJoinForm">
-                <label class="pLabel" for="player-room">ROOM CODE</label>
-                <div class="pRoomCodeWrap" id="player-room-field">
-                  <input id="player-room" class="pInput pInputCode" maxlength="12" placeholder="Enter room code" autocomplete="off" />
-                  <button id="player-qr-btn" class="pQrBtn" type="button" title="Scan QR code">⌁</button>
-                </div>
-                <div id="player-join-error" class="pError hidden"></div>
-                <div class="pHint">You can scan the QR from the host screen</div>
-
-                <label class="pLabel" for="player-nick">YOUR NAME</label>
-                <input id="player-nick" class="pInput" maxlength="20" placeholder="Your name" autocomplete="off" />
-                <div class="pCount" id="player-nick-count">0/20</div>
-
-                <button id="player-join" class="pJoinBtn hidden" type="button">JOIN ROOM</button>
-                <div class="pJoinStatus" id="player-join-status"></div>
-              </div>
-            </div>
-
-            <!-- GAME VIEW (submit / vote / final) -->
-            <div id="player-view-game" class="pGameView hidden">
-              <!-- sticky timer pill (yellow/orange/red) -->
-              <div class="pTimerDock">
-                <div id="player-timer" class="playerTimerPill hidden">120</div>
-              </div>
-
-              <!-- Task card -->
-              <div class="pTaskCard">
-                <div class="pTaskTop">
-                  <div id="player-round-label" class="pTaskRound">ROUND —</div>
-                  <div id="player-task-status" class="pTaskStatus">Waiting for host to start the round</div>
-                </div>
-                <div id="player-task" class="pTaskTitle">—</div>
-              </div>
-
-              <!-- Waiting dots (when round is not active) -->
-              <div id="player-waiting" class="pWaiting hidden" aria-label="Waiting">
-                <div class="pDot"></div><div class="pDot"></div><div class="pDot"></div>
-              </div>
-
-              <!-- SUBMIT PANEL -->
-              <div id="player-submit-panel" class="pSubmitPanel">
-                <!-- Type chooser -->
-                <div id="player-type-chooser" class="pTypeChooser">
-                  <button id="player-type-file" class="pTypeBtn" type="button">
-                    <div class="pTypeIcon">📎</div>
-                    <div class="pTypeTitle">Attach file</div>
-                    <div class="pTypeDesc">Images · GIFs · Video · Audio (JPG, PNG, GIF, MP4, MP3)</div>
-                  </button>
-                  <button id="player-type-link" class="pTypeBtn" type="button">
-                    <div class="pTypeIcon">🔗</div>
-                    <div class="pTypeTitle">Add link</div>
-                  </button>
-                  <button id="player-type-text" class="pTypeBtn" type="button">
-                    <div class="pTypeIcon">✍️</div>
-                    <div class="pTypeTitle">Text-Only Meme</div>
-                  </button>
-                </div>
-
-                <!-- FILE MODE -->
-                <div id="player-mode-file" class="pMode hidden">
-                  <button class="pBackBtn" id="player-back-file" type="button">← Back</button>
-
-                  <div class="pCard">
-                    <label class="pCardLabel" for="player-meme-url">File URL</label>
-                    <input id="player-meme-url" class="pCardInput" placeholder="https://..." autocomplete="off" />
-                    <div class="pCardHint">Images · GIFs · Video · Audio (JPG, PNG, GIF, MP4, MP3)</div>
-
-                    <label class="pCardLabel" for="player-meme-file" style="margin-top:14px">Attach file</label>
-                    <input id="player-meme-file" class="pCardInput" type="file" accept="image/*,image/gif,video/*,audio/*" />
-                    <div class="pCardHint">If file selected — URL will be ignored. Limit ~8MB.</div>
-
-                    <img id="player-preview" class="pPreview hidden" alt="Preview" />
-                  </div>
-
-                  <div id="player-caption-wrap" class="pCard pCaptionWrap hidden">
-                    <label class="pCaptionLabel" for="player-meme-caption">Add caption / comment (optional)</label>
-                    <textarea id="player-meme-caption" class="pCaptionInput" rows="3" placeholder="Add a funny caption..."></textarea>
-                  </div>
-                </div>
-
-                <!-- LINK MODE -->
-                <div id="player-mode-link" class="pMode hidden">
-                  <button class="pBackBtn" id="player-back-link" type="button">← Back</button>
-
-                  <div class="pCard">
-                    <label class="pCardLabel" for="player-meme-url-link">Paste Link</label>
-                    <input id="player-meme-url-link" class="pCardInput" placeholder="https://..." autocomplete="off" />
-                    <div class="pCardHint">Direct links to images, GIFs or videos (TikTok, Imgur, Giphy, etc.)</div>
-
-                    <img id="player-preview-link" class="pPreview hidden" alt="Preview" />
-                  </div>
-
-                  <div id="player-caption-wrap-link" class="pCard pCaptionWrap hidden">
-                    <label class="pCaptionLabel" for="player-meme-caption-link">Add caption / comment (optional)</label>
-                    <textarea id="player-meme-caption-link" class="pCaptionInput" rows="3" placeholder="Add a funny caption..."></textarea>
-                  </div>
-                </div>
-
-                <!-- TEXT MODE (NO COMMENT) -->
-                <div id="player-mode-text" class="pMode hidden">
-                  <button class="pBackBtn" id="player-back-text" type="button">← Back</button>
-
-                  <div class="pCard">
-                    <label class="pCardLabel" for="player-meme-text">Your Text Meme</label>
-                    <textarea id="player-meme-text" class="pCardInput" rows="8" placeholder="Type your meme text here..."></textarea>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Sticky submit -->
-              <div id="player-submit-sticky" class="pSubmitSticky hidden">
-                <button id="player-send-meme" class="pSubmitBtn" type="button" disabled>SUBMIT MEME</button>
-                <div id="player-sent" class="pSent hidden">✅ Meme sent</div>
-              </div>
-
-              <!-- VOTE PANEL -->
-              <div id="player-vote-panel" class="pVotePanel hidden">
-                <div id="player-vote" class="memes"></div>
-                <div id="player-voted" class="pSent hidden">✅ Vote counted</div>
-                <div id="player-vote-finished" class="pSent hidden">✅ Voting finished</div>
-                <div id="player-next-wrap" class="pNextWrap hidden">
-                  <button id="player-next-round" class="pSubmitBtn" type="button">READY</button>
-                  <div id="player-next-wait" class="muted"></div>
-                </div>
-              </div>
-
-              <!-- FINAL PANEL -->
-              <div id="player-final-panel" class="pFinalPanel hidden">
-                <div id="player-final" class="results"></div>
-              </div>
-            </div>
-          </div>
-
-          <!-- QR overlay (mock) -->
-          <div id="player-qr-overlay" class="pQrOverlay hidden">
-            <div class="pQrCard">
-              <div class="pQrBox">
-                <div class="pQrBoxText">Camera scanning...</div>
-              </div>
-              <div class="pQrInstr">Point camera at QR code</div>
-              <button id="player-qr-cancel" class="pQrCancel" type="button">Cancel</button>
-            </div>
-          </div>
-        </div>
-
-      </section>
-
-<section id="screen-admin" class="screen hidden">
         <div class="row">
-          <h2>Админ</h2>
-          <div class="pill" id="admin-conn">offline</div>
+          <h2>Ведущий</h2>
+          <div class="pill" id="host-conn">offline</div>
         </div>
 
         <div class="panel">
-          <div class="row" style="justify-content:space-between; align-items:flex-end">
-            <div style="flex:1">
-              <label>Admin token:
-                <input id="admin-token" type="password" placeholder="token" autocomplete="off"/>
-              </label>
-              <div class="muted" id="admin-status"></div>
+          <button id="host-create-room" class="primary">Создать комнату</button>
+          <div class="roomline">
+            <div>Код: <b id="host-room-code">—</b></div>
+            <button id="host-copy-link" class="ghost">Скопировать ссылку</button>
+          </div>
+          <div class="muted" id="host-room-link"></div>
+        </div>
+
+        <div class="grid2">
+          <div class="panel">
+            <h3>Настройки игры</h3>
+            <label>Раундов:
+              <input id="host-total-rounds" type="number" min="1" max="20" value="5"/>
+            </label>
+            <label>Задания (по одному на строку):
+              <textarea id="host-tasks" rows="6" placeholder="Мем про...\nМем когда...\n..."></textarea>
+            </label>
+            <div class="btns">
+              <button id="host-start-game" class="primary">Начать игру</button>
+              <button id="host-next-round" class="secondary" disabled>Следующий раунд</button>
+              <button id="host-start-vote" class="secondary" disabled>Начать голосование</button>
+              <button id="host-end-game" class="danger" disabled>Завершить игру</button>
+              <button id="host-new-game" class="secondary hidden">Новая игра</button>
             </div>
-            <div class="btns" style="margin-left:10px">
-              <button id="admin-login" class="primary" type="button">Войти</button>
-              <button id="admin-logout" class="ghost hidden" type="button">Выйти</button>
-              <button id="admin-back" class="secondary" type="button">Назад</button>
-            </div>
+            <div class="muted" id="host-round-info">Раунд: —</div>
+          </div>
+
+          <div class="panel">
+            <h3>Игроки</h3>
+            <div id="host-players" class="list"></div>
           </div>
         </div>
 
-        <div id="admin-body" class="hidden">
-          <div class="tabs">
-            <button class="tabbtn active" data-tab="overview" id="admin-tabbtn-overview">Обзор</button>
-            <button class="tabbtn" data-tab="rooms" id="admin-tabbtn-rooms">Комнаты</button>
-            <button class="tabbtn" data-tab="sandbox" id="admin-tabbtn-sandbox">Песочница</button>
-            <button class="tabbtn" data-tab="logs" id="admin-tabbtn-logs">Логи</button>
-          </div>
-
-          <div id="admin-tab-overview" class="tabpane">
-            <div class="statgrid" id="admin-stats"></div>
-
-            <div class="grid2" style="margin-top:12px">
-              <div class="panel">
-                <h3>Активность</h3>
-                <div id="admin-activity" class="list"></div>
-              </div>
-              <div class="panel">
-                <h3>События (последние)</h3>
-                <div id="admin-events" class="log"></div>
-              </div>
-            </div>
-          </div>
-
-          <div id="admin-tab-rooms" class="tabpane hidden">
-            <div class="row" style="justify-content:space-between">
-              <div class="muted">Кликни по комнате, чтобы посмотреть детали.</div>
-              <button id="admin-refresh-rooms" class="ghost" type="button">Обновить</button>
-            </div>
-            <div id="admin-rooms" class="list"></div>
-          </div>
-
-          
-          <div id="admin-tab-sandbox" class="tabpane hidden">
-            <div class="panel">
-              <h3>Автотест (реальная игра, настоящие боты)</h3>
-              <div class="muted">Создаёт тестовую комнату, подключает ботов, отправляет разные типы мемов (файл/ссылка), голосует и завершает игру. В конце — отчёт и история шагов.</div>
-
-              <div class="grid2" style="margin-top:10px">
-                <div>
-                  <div class="row" style="justify-content:space-between; gap:10px; flex-wrap:wrap">
-                    <label>Раундов:
-                      <input id="admin-at-rounds" type="number" min="1" max="5" value="1" style="width:90px"/>
-                    </label>
-                    <label style="flex:1; min-width:220px">Тема (опционально):
-                      <input id="admin-at-theme" type="text" placeholder="Напр.: «работа», «Чехия», «интернет»" />
-                    </label>
-                  </div>
-
-                  <div class="btns" style="flex-wrap:wrap; gap:8px; margin-top:10px">
-                    <button id="admin-at-run" class="primary" type="button">🚀 Быстрый автотест</button>
-                    <button id="admin-at-step" class="secondary" type="button">⏭ Пошаговый тест</button>
-                    <button id="admin-at-cancel" class="danger" type="button" disabled>Стоп</button>
-                  </div>
-
-                  <div class="row" style="margin-top:10px; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap">
-                    <div class="muted">Комната: <b class="code" id="admin-at-room">—</b></div>
-                    <div class="btns" style="gap:8px">
-                      <button id="admin-at-copy" class="ghost" type="button" disabled>Copy report</button>
-                      <button id="admin-at-clear" class="ghost" type="button">Clear</button>
-                    </div>
-                  </div>
-
-                  <div class="muted" id="admin-at-status" style="margin-top:6px"></div>
-                  <pre id="admin-at-report" class="testReport">—</pre>
-                </div>
-
-                <div>
-                  <h3 style="margin-top:0">История</h3>
-                  <div id="admin-at-history" class="testHistory"></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="panel" style="margin-top:14px">
-              <h3>Быстрый тест (не влияет на реальные комнаты)</h3>
-              <div class="grid2">
-                <div>
-                  <label>Комнат:
-                    <input id="admin-sb-rooms" type="number" min="1" max="20" value="3"/>
-                  </label>
-                  <label>Игроков в комнате:
-                    <input id="admin-sb-players" type="number" min="1" max="12" value="4"/>
-                  </label>
-                  <label>Мемов в комнате:
-                    <input id="admin-sb-memes" type="number" min="0" max="12" value="4"/>
-                  </label>
-                  <div class="btns">
-                    <button id="admin-sb-generate" class="primary" type="button">Сгенерировать</button>
-                    <button id="admin-sb-reset" class="danger" type="button">Сбросить</button>
-                  </div>
-                  <div class="muted" id="admin-sb-status"></div>
-                </div>
-                <div>
-                  <h3 style="margin-top:0">Песочница</h3>
-                  <div id="admin-sb-list" class="list"></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="panel" style="margin-top:14px">
-              <h3>Стенд для реальной комнаты (для теста / отладки)</h3>
-              <div class="muted">⚠️ Используй на тестовой комнате. Эти действия меняют состояние выбранной комнаты.</div>
-              <div class="grid2" style="margin-top:10px">
-                <div>
-                  <label>Код комнаты:
-                    <input id="admin-rt-code" type="text" placeholder="ABCD" style="text-transform:uppercase" list="admin-roomcodes"/>
-                  </label>
-                  <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:8px">
-                    <label style="display:flex; align-items:center; gap:8px">
-                      Ботов:
-                      <input id="admin-rt-bots" type="number" min="1" max="20" value="2" style="width:90px"/>
-                    </label>
-                    <label style="display:flex; align-items:center; gap:8px">
-                      <input id="admin-rt-bots-online" type="checkbox" checked/>
-                      Боты online
-                    </label>
-                  </div>
-
-                  <div class="btns" style="flex-wrap:wrap; gap:8px; margin-top:10px">
-                    <button id="admin-rt-add-bots" class="primary" type="button">Добавить ботов</button>
-                    <button id="admin-rt-fill-memes" class="ghost" type="button">Заполнить мемы</button>
-                    <button id="admin-rt-reveal" class="ghost" type="button">Показать мемы</button>
-                    <button id="admin-rt-force-vote" class="primary" type="button">Начать vote</button>
-                    <button id="admin-rt-auto-vote" class="ghost" type="button">Авто-голоса</button>
-                    <button id="admin-rt-reset-round" class="danger" type="button">Сбросить раунд</button>
-                  </div>
-
-                  <div class="muted" id="admin-rt-status" style="margin-top:8px"></div>
-                </div>
-
-                <div>
-                  <h3 style="margin-top:0">Подсказка</h3>
-                  <div class="muted">
-                    1) Создай комнату как ведущий (обычным способом).<br/>
-                    2) Вставь код комнаты сюда.<br/>
-                    3) Добавь ботов, заполни мемы, запусти vote и проверь UI/логи.
-                  </div>
-                </div>
-              </div>
-
-              <datalist id="admin-roomcodes"></datalist>
-            </div>
-          </div>
-<div id="admin-tab-logs" class="tabpane hidden">
-            <div class="row" style="justify-content:space-between">
-              <input id="admin-log-filter" class="logfilter" placeholder="фильтр: tag, room, nick..." />
-              <button id="admin-copy-events" class="ghost" type="button">Copy JSON</button>
-            </div>
-            <div id="admin-log" class="log"></div>
-          </div>
+        <div class="panel">
+          <h3>Мемы раунда</h3>
+          <div id="host-memes" class="memes"></div>
+          <div class="muted" id="host-phase">Фаза: —</div>
         </div>
 
-        <div id="admin-room-overlay" class="overlay hidden">
-          <div class="overlay-card wide">
-            <div class="row">
-              <h3 id="admin-room-title">Комната</h3>
-              <button id="admin-room-close" class="ghost">×</button>
-            </div>
-            <div id="admin-room-detail" class="admin-room-detail"></div>
-          </div>
+        <div class="panel">
+          <h3>Результаты</h3>
+          <div id="host-results" class="results"></div>
         </div>
       </section>
-        <div id="admin-errors-modal" class="overlay hidden">
-          <div class="overlay-card wide">
-            <div class="row">
-              <h3 id="admin-errors-title">Ошибки</h3>
-              <div class="row" style="gap:8px">
-                <button id="admin-errors-copy" class="ghost" type="button">Copy JSON</button>
-                <button id="admin-errors-close" class="ghost" type="button">×</button>
-              </div>
-            </div>
-            <div class="muted" id="admin-errors-hint" style="margin-top:6px"></div>
-            <div id="admin-errors-body" class="errorsList"></div>
+
+      <section id="screen-player" class="screen hidden">
+        <div class="row">
+          <h2>Игрок</h2>
+          <div class="pill" id="player-conn">offline</div>
+        </div>
+
+        <div class="panel">
+          <label>Код комнаты:
+            <input id="player-room" placeholder="ABCD" autocomplete="off"/>
+          </label>
+          <label>Ник:
+            <input id="player-nick" placeholder="Твой ник" autocomplete="off"/>
+          </label>
+          <button id="player-join" class="primary">Войти</button>
+          <div class="muted" id="player-join-status"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Задание</h3>
+          <div id="player-task" class="task">—</div>
+        </div>
+
+        <div class="panel">
+          <h3>Отправь мем</h3>
+          <label>Ссылка на картинку/GIF:
+            <input id="player-meme-url" placeholder="https://..." autocomplete="off"/>
+          </label>
+
+          <label>Файл (картинка или GIF):
+            <input id="player-meme-file" type="file" accept="image/*,image/gif"/>
+          </label>
+          <div class="muted">Если выбран файл — ссылка будет игнорироваться. Лимит ~8MB.</div>
+
+          <label>Подпись (необязательно):
+            <input id="player-meme-caption" placeholder="..." autocomplete="off"/>
+          </label>
+          <div class="btns">
+            <button id="player-send-meme" class="primary">Отправить</button>
+            <div id="player-sent" class="sent hidden">✅ Мем отправлен</div>
           </div>
         </div>
 
-</main>
+        <div class="panel">
+          <h3>Голосование</h3>
+          <div id="player-vote" class="memes"></div>
+          <div id="player-voted" class="sent hidden">✅ Голос учтён</div>
+        </div>
+
+        <div class="panel">
+          <h3>Финал</h3>
+          <div id="player-final" class="results"></div>
+        </div>
+
+        <div id="player-next-wrap" class="panel hidden">
+          <button id="player-ready-next" class="primary">Следующий раунд</button>
+          <div id="player-ready-next-msg" class="muted hidden">Готово ✅</div>
+        </div>
+      </section>
+    </main>
   </div>
 
-  
-  <button id="settings-toggle" class="settings-btn hidden">Настройки</button>
-  <div id="settings-panel" class="settings hidden">
-    <div class="settings-head">
-      <b>Настройки</b>
-      <button id="settings-close" class="ghost">×</button>
-    </div>
-    <div class="settings-body">
-      <div class="panel admin" id="admin-panel">
-            <div class="row">
-              <h3>Admin mode</h3>
-              <label class="switch">
-                <input id="admin-enabled" type="checkbox"/>
-                <span class="sw"></span>
-              </label>
-            </div>
-            <div class="muted">Калибровка карточки плеера действует только на этом устройстве.</div>
-
-            <div class="admin-grid">
-              <div>
-                <label>Ширина карточки (px):
-                  <input id="cal-card-w" type="range" min="240" max="900" step="10" value="520"/>
-                  <span class="rangev" id="cal-card-wv">520</span>
-                </label>
-
-                <label>Высота карточки (px):
-                  <input id="cal-card-h" type="range" min="220" max="900" step="10" value="520"/>
-                  <span class="rangev" id="cal-card-hv">520</span>
-                </label>
-
-
-                <label>Масштаб плеера (zoom):
-                  <div class="rangeRow">
-                    <button id="cal-zoom-minus" class="miniBtn ghost" type="button">−</button>
-                    <input id="cal-zoom" type="range" min="0.10" max="2.0" step="0.01" value="1"/>
-                    <button id="cal-zoom-plus" class="miniBtn ghost" type="button">+</button>
-                    <span class="rangev" id="cal-zoomv">1.00</span>
-                  </div>
-                </label>
-
-                <label>Привязка (Y):
-                  <select id="cal-anchor-y">
-                    <option value="top">верх</option>
-                    <option value="center">центр</option>
-                    <option value="bottom">низ</option>
-                  </select>
-                </label>
-
-                
-                <label>Рамки по краям (px):
-                  <input id="cal-crop-x" type="range" min="-600" max="600" step="2" value="0"/>
-                  <span class="rangev" id="cal-crop-xv">0</span>
-                </label>
-<label>Обрезка снизу (px):
-                  <input id="cal-crop-b" type="range" min="0" max="260" step="2" value="60"/>
-                  <span class="rangev" id="cal-crop-bv">60</span>
-                </label>
-
-                <div class="btns">
-                  <button id="cal-save" class="primary" type="button">Сохранить</button>
-                  <button id="cal-reset" class="ghost" type="button">Сброс</button>
-                </div>
-                <div class="muted" id="cal-save-status" style="margin-top:8px"></div>
-              </div>
-
-              <div>
-                <div class="muted" style="margin-bottom:6px">Пресеты</div>
-                <div class="btns">
-                  <button id="cal-preset-desktop" class="secondary">ПК / большой экран</button>
-                  <button id="cal-preset-mobile" class="secondary">Мобилка (вертикаль)</button>
-                </div>
-                <div class="muted" style="margin-top:10px">Совет: выставь высоту так, чтобы в карточке осталось только видео, а низ TikTok ушёл за край через «Обрезка снизу».</div>
-
-                <div class="muted" style="margin-top:14px; margin-bottom:6px">Калибровочное видео (TikTok)</div>
-                <div id="cal-preview" class="cal-preview"></div>
-                <div class="btns" style="margin-top:10px">
-                  <button id="cal-open-video" class="ghost" type="button">Открыть калибровочное видео</button>
-                </div>
-              </div>
-            </div>
-          </div>
-    </div>
-  </div>
-
-<button id="debug-toggle" class="debug-btn">DEBUG</button>
+  <button id="debug-toggle" class="debug-btn">DEBUG</button>
   <div id="debug-panel" class="debug hidden">
     <div class="debug-head">
       <b>DEBUG</b>
-      <div class="debug-actions">
-        <button id="debug-copy" class="ghost">Copy</button>
-      <button id="debug-download" class="ghost" title="Скачать JSON">⬇️</button>
-        <button id="debug-clear" class="ghost">Clear</button>
-      </div>
       <button id="debug-close" class="ghost">×</button>
     </div>
-
-    <!-- [ANCHOR] MB:DEBUG:PANEL_CONTROLS -->
-    <div class="debug-sub">
-      <label class="dbgchk">
-        <input type="checkbox" id="debug-enabled" checked>
-        <span>DEBUG</span>
-      </label>
-      <div id="debug-room-state" class="muted">Room debug: —</div>
-      <div class="debug-sub-actions">
-        <button id="debug-snapshot" class="ghost" title="Fetch server timeline snapshot">Snapshot</button>
-        <button id="debug-tl-clear" class="ghost" title="Clear server timeline">Clear TL</button>
-      </div>
-    </div>
-    <div id="debug-timeline" class="debug-timeline"></div>
-
     <div id="debug-body" class="debug-body"></div>
   </div>
 
-
-  <div id="qr-overlay" class="overlay hidden">
-    <div class="overlay-card">
-      <div class="row">
-        <h3>QR для входа</h3>
-        <button id="qr-close" class="ghost">×</button>
-      </div>
-      <img id="qr-overlay-img" class="qrimg big" alt="QR"/>
-      <div class="muted" id="qr-overlay-link">—</div>
-      <div class="btns" style="margin-top:10px">
-        <button id="qr-copy" class="secondary">Скопировать ссылку</button>
-      </div>
-    </div>
-  </div>
-
-
   <script src="/socket.io/socket.io.js"></script>
-  <script src="./script.js?v=0.1.18"></script>
-  <div id="winner-overlay" class="overlay hidden wsStage" aria-hidden="true">
-    <!-- Background rotating shapes (20% opacity) -->
-    <div class="wsBg" aria-hidden="true">
-      <div class="wsSpin">
-        <div class="wsShape wsCircle"></div>
-        <div class="wsShape wsSquare"></div>
-        <div class="wsShape wsDiamond"></div>
-      </div>
-      <div id="winner-confetti" class="wsConfetti"></div>
-    </div>
-
-    <!-- Foreground content -->
-    <div class="wsContent">
-      <div class="wsHeader">
-        <div id="winner-title" class="wsTitle">ROUND WINNER</div>
-        <div class="wsLine"></div>
-      </div>
-
-      <div id="winner-emoji" class="wsEmoji">🏆</div>
-
-      <div id="winner-cards" class="wsCards"></div>
-
-      <!-- [ANCHOR] MB:WINNER:PLAYER_CONTROLS -->
-      <div id="winner-player-controls" class="wsPlayerControls hidden">
-        <button id="winner-player-next-round" class="primary wsPlayerBtn">Готов</button>
-        <div id="winner-player-next-wait" class="wsPlayerWait muted"></div>
-      </div>
-
-      <!-- [ANCHOR] MB:WINNER:HOST_CONTROLS -->
-      <div id="winner-host-controls" class="wsHostControls hidden">
-        <div id="winner-host-mini-stats" class="wsHostMiniStats"></div>
-        <button id="winner-host-next-round" class="primary wsHostBtn">Следующий раунд (хост)</button>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- [ANCHOR] MB:HTML:FINAL_OVERLAY -->
-  <div id="final-overlay" class="overlay hidden fsStage" aria-hidden="true">
-    <!-- Decorative background elements -->
-    <div class="fsDeco" aria-hidden="true">
-      <div class="fsDecoCircle"></div>
-      <div class="fsDecoSquare"></div>
-    </div>
-
-    <!-- Host action -->
-    <button id="final-host-new-game" class="secondary fsNewGameBtn" type="button">Новая игра</button>
-
-    <div class="fsWrap">
-      <!-- Header -->
-      <div class="fsHeader">
-        <div class="fsTitle">FINAL RESULTS</div>
-        <div class="fsLine"></div>
-      </div>
-
-      <!-- Main grid -->
-      <div class="fsGrid">
-        <!-- Left: Champion -->
-        <div class="fsLeft">
-          <div class="fsWinnerWrap">
-            <div class="fsSpotlight" aria-hidden="true"></div>
-
-            <div class="fsFrame">
-              <div class="fsCard">
-                <div id="final-crown" class="fsCrown" aria-hidden="true">👑</div>
-                <div class="fsChampion">CHAMPION</div>
-                <div id="final-winner-name" class="fsWinnerName">—</div>
-                <div class="fsPts"><span id="final-winner-score">0</span> PTS</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Right: Leaderboard -->
-        <div class="fsRight">
-          <div class="fsTopTitle">TOP 3</div>
-          <div id="final-top3" class="fsTop3"></div>
-
-          <div id="final-rest-wrap" class="fsRestWrap hidden">
-            <div class="fsOtherTitle">OTHER PLAYERS</div>
-            <div id="final-rest" class="fsRest"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
+  <script src="./script.js"></script>
 </body>
 </html>
