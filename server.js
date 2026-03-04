@@ -44,7 +44,7 @@ const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 25000);
 
 
 // [ANCHOR] MB:S:VERSION
-const APP_VERSION = process.env.APP_VERSION || "0.1.20-beta";
+const APP_VERSION = process.env.APP_VERSION || "0.1.21-beta";
 const ADMIN_TOKEN = String(process.env.ADMIN_TOKEN || "dev").trim(); // ⚠️ поменяй в Secrets/ENV
 
 const STARTED_AT = Date.now();
@@ -471,14 +471,38 @@ function rebalanceEdgeLevels(tasks, want, maxEdge){
 }
 
 
+// [ANCHOR] MB:S:OPENAI_USAGE — normalize/sum token usage + timings
+function normalizeOpenAiUsage(u){
+  if(!u || typeof u !== "object") return null;
+  const input = Number(u.input_tokens ?? u.prompt_tokens ?? u.inputTokens ?? u.promptTokens ?? 0) || 0;
+  const output = Number(u.output_tokens ?? u.completion_tokens ?? u.outputTokens ?? u.completionTokens ?? 0) || 0;
+  const total = Number(u.total_tokens ?? u.totalTokens ?? (input + output) ?? 0) || 0;
+  return { input_tokens: input, output_tokens: output, total_tokens: total };
+}
+function addUsageSum(acc, u){
+  if(!acc || !u) return;
+  acc.input_tokens += Number(u.input_tokens || 0) || 0;
+  acc.output_tokens += Number(u.output_tokens || 0) || 0;
+  acc.total_tokens += Number(u.total_tokens || 0) || 0;
+}
+
+
 
 // [ANCHOR] MB:S:OPENAI_TASKS — main entry used by socket handler
 async function openaiGenerateTasks({ themes, rounds, edgeLevelMax, lang = "ru", mode = "default", difficulty = "", ageConfirm = false }){
   if(!OPENAI_API_KEY) throw new Error("E_NO_OPENAI_KEY");
 
-  const safeThemes = (themes || []).map(cleanOneLine).filter(Boolean).slice(0, 50);
+  const startedAll = Date.now();
+
+  let safeThemes = (themes || []).map(cleanOneLine).filter(Boolean).slice(0, 50);
+  if(!safeThemes.length) safeThemes = ["general"];
   const totalRounds = clampInt(rounds, 1, 60, 5);
   const maxEdge = clampInt(edgeLevelMax, 0, 4, 0);
+
+  let tokKnown = false;
+  const usageSum = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+  let apiCalls = 0;
+  let cachedTopics = 0;
 
   // Allocate counts per topic (roughly equal / proportional)
   const perTopicCounts = Object.create(null);
@@ -510,8 +534,10 @@ async function openaiGenerateTasks({ themes, rounds, edgeLevelMax, lang = "ru", 
     });
 
     let topicTasks = getCachedTopicTasks(cacheKey);
-    if(!topicTasks){
-      topicTasks = await openaiGenerateTopicTasks({
+    if(topicTasks){
+      cachedTopics++;
+    }else{
+      const r = await openaiGenerateTopicTasks({
         topic,
         count: Math.max(need + 4, need), // extra for filtering/anti-repeat
         lang,
@@ -521,6 +547,9 @@ async function openaiGenerateTasks({ themes, rounds, edgeLevelMax, lang = "ru", 
         cfg,
         ageConfirm
       });
+      apiCalls++;
+      if(r && r.usage){ tokKnown = true; addUsageSum(usageSum, r.usage); }
+      topicTasks = (r && Array.isArray(r.tasks)) ? r.tasks : [];
       setCachedTopicTasks(cacheKey, topicTasks);
     }
 
@@ -536,12 +565,24 @@ async function openaiGenerateTasks({ themes, rounds, edgeLevelMax, lang = "ru", 
     maxEdge
   });
 
-  const usage = null; // aggregated usage is hard without extra bookkeeping; keep null
+  const tookMs = Date.now() - startedAll;
+  const usage = tokKnown
+    ? { ...usageSum, took_ms: tookMs, api_calls: apiCalls, cached_topics: cachedTopics }
+    : {
+        input_tokens: (apiCalls === 0 ? 0 : null),
+        output_tokens: (apiCalls === 0 ? 0 : null),
+        total_tokens: (apiCalls === 0 ? 0 : null),
+        tokens_unavailable: (apiCalls > 0),
+        took_ms: tookMs,
+        api_calls: apiCalls,
+        cached_topics: cachedTopics
+      };
   return { tasks: final, byTopic, usage, model: OPENAI_MODEL, generatorVersion: AI_GENERATOR_VERSION };
 }
 
 // [ANCHOR] MB:S:OPENAI_TASKS:TOPIC — OpenAI call per topic (reaction-based, with formats)
 async function openaiGenerateTopicTasks({ topic, count, lang, mode, difficulty, edgeLevelMax, cfg, ageConfirm }){
+  const started = Date.now();
   const want = clampInt(count, 1, 120, 12);
   const maxEdge = clampInt(edgeLevelMax, 0, 4, 0);
 
@@ -737,7 +778,9 @@ ${edgeStyleRubricText()}`,
   tasks = rebalanceFormatTypes(tasks, want, formatWeights);
   tasks = rebalanceEdgeLevels(tasks, want, maxEdge);
 
-  return tasks.slice(0, want);
+  const tookMs = Date.now() - started;
+  const usage = normalizeOpenAiUsage(json?.usage);
+  return { tasks: tasks.slice(0, want), usage, took_ms: tookMs, model: OPENAI_MODEL };
 }
 
 // [ANCHOR] MB:S:OPENAI_TASKS:ASSEMBLY — round-robin + anti-repeat across topics
@@ -938,7 +981,17 @@ app.use(express.static(path.join(__dirname, "."), {
 // [ANCHOR] MB:S:HTTP_ROUTES
 app.get("/health", (req, res) => res.json({ ok: true, ts: new Date().toISOString(), version: APP_VERSION, adminTokenConfigured: ADMIN_TOKEN !== "dev" }));
 app.get("/api/version", (req, res) => res.json({ ok:true, version: APP_VERSION }));
-app.get("/join/:code", (req,res)=> res.sendFile(path.join(__dirname, "index.html")));
+// --- Unified routes: Role Select (/) + Host (/host) + Player (/player/) ---
+// Root "/" is served by static index.html (role select).
+app.get("/host", (req, res) => res.sendFile(path.join(__dirname, "host.html")));
+
+// Optional: allow /player/ to always return player index.html (in case of future routing)
+app.get("/player", (req, res) => res.sendFile(path.join(__dirname, "player", "index.html")));
+app.get(/\/player\/.*/, (req, res) => {
+  res.sendFile(path.join(__dirname, "player", "index.html"));
+});
+
+app.get("/join/:code", (req,res)=> res.redirect(`/player/?room=${encodeURIComponent(String(req.params.code||"").toUpperCase())}`));
 const io = new Server(server, {
   cors: { origin: "*" },
   transports: ["websocket", "polling"],

@@ -1247,27 +1247,56 @@ function hostRoundStopTimer(){
 
 
 // [ANCHOR] MB:F:HOST_ROUND:TIMER
-function hostRoundStartTimer(seconds){
+function hostRoundStartTimer(seconds, endsAt){
   hostRoundStopTimer();
-  hostRoundState.secondsTotal = Math.max(5, Number(seconds)||120);
-  hostRoundState.secondsLeft = hostRoundState.secondsTotal;
+
+  // Prefer server-sent absolute endsAt (ms since epoch, server clock). This keeps ALL devices in sync.
+  const secTotal = Math.max(5, Number(seconds)||120);
+  hostRoundState.secondsTotal = secTotal;
   hostRoundState.forcedVote = false;
-  hostRoundSetTimerVisual(hostRoundState.secondsLeft);
-  hostRoundState.interval = setInterval(()=>{
-    hostRoundState.secondsLeft = Math.max(0, (hostRoundState.secondsLeft||0) - 1);
-    hostRoundSetTimerVisual(hostRoundState.secondsLeft);
-    if(hostRoundState.secondsLeft <= 0){
+
+  // If we don't have endsAt, approximate using server-aligned clock (serverNow via room-status).
+  const ea = Number(endsAt || hostRoundState.collectEndsAt || 0);
+  hostRoundState.collectEndsAt = (Number.isFinite(ea) && ea > 0) ? ea : (mbAlignedNow() + secTotal * 1000);
+
+  const tick = ()=>{
+    // Stop if phase already moved away from collect (prevents late "forced vote")
+    try{
+      const st = lastRoomStatus;
+      if(st && st.phase && st.phase !== "collect"){
+        hostRoundStopTimer();
+        return;
+      }
+    }catch(e){}
+
+    const leftMs = hostRoundState.collectEndsAt - mbAlignedNow();
+    let left = Math.ceil(leftMs / 1000);
+    if(!Number.isFinite(left)) left = 0;
+    left = Math.max(0, left);
+
+    // Only update when changed to avoid extra layout work
+    if(left !== hostRoundState.secondsLeft){
+      hostRoundState.secondsLeft = left;
+      hostRoundSetTimerVisual(left);
+    }
+
+    if(left <= 0){
       hostRoundStopTimer();
       // force voting if still collecting
       try{
         const st = lastRoomStatus;
-        if(!hostRoundState.forcedVote && currentRoom && st && st.phase === 'collect'){
+        if(!hostRoundState.forcedVote && currentRoom && st && st.phase === "collect"){
           hostRoundState.forcedVote = true;
-          socket.emit('host-start-vote', { roomCode: currentRoom }, ()=>{});
+          socket.emit("host-start-vote", { roomCode: currentRoom }, ()=>{});
         }
       }catch(e){}
     }
-  }, 1000);
+  };
+
+  // immediate paint + tighter tick for better sync (still cheap)
+  hostRoundState.secondsLeft = -1;
+  tick();
+  hostRoundState.interval = setInterval(tick, 250);
 }
 
 function hostRoundSetTask(task, roundNum, totalRounds){
@@ -1380,10 +1409,10 @@ function hostVoteStartTimer(secondsTotal){
     let left = 0;
 
     if (Number.isFinite(endsAt) && endsAt > 0) {
-      left = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+      left = Math.max(0, Math.ceil((endsAt - mbAlignedNow()) / 1000));
     } else {
-      if(!hostVoteState.voteStartAt) hostVoteState.voteStartAt = Date.now();
-      const elapsed = Math.floor((Date.now() - (hostVoteState.voteStartAt||Date.now())) / 1000);
+      if(!hostVoteState.voteStartAt) hostVoteState.voteStartAt = mbAlignedNow();
+      const elapsed = Math.floor((mbAlignedNow() - (hostVoteState.voteStartAt||mbAlignedNow())) / 1000);
       left = Math.max(0, hostVoteState.secondsTotal - elapsed);
     }
 
@@ -1631,13 +1660,13 @@ function hostVoteEnter(st){
       hostVoteState.voteStartAt = 0;
     } else {
       // fallback (should be rare)
-      hostVoteState.voteStartAt = Date.now();
+      hostVoteState.voteStartAt = mbAlignedNow();
       hostVoteState.voteEndsAt = 0;
     }
     const vs = Number(st?.voteSeconds || 0);
     if(Number.isFinite(vs) && vs > 0) hostVoteState.secondsTotal = Math.max(5, vs);
   }catch(e){
-    hostVoteState.voteStartAt = Date.now();
+    hostVoteState.voteStartAt = mbAlignedNow();
     hostVoteState.voteEndsAt = 0;
   }
 
@@ -1865,6 +1894,11 @@ function isPlayerScreenVisible(){
 
 function playerTimerAlignedNow(){
   return Date.now() - (Number(playerTimerState.serverOffsetMs) || 0);
+}
+
+// [ANCHOR] MB:F:TIME_SYNC — shared "server-aligned" clock for ALL timers (host+player)
+function mbAlignedNow(){
+  try{ return Date.now() - (Number(playerTimerState.serverOffsetMs) || 0); }catch(e){ return Date.now(); }
 }
 
 function playerTimerStop(reason){
@@ -3081,8 +3115,20 @@ async function aiGenerateTasks(force = false){
   $("ai-to-textarea") && ($("ai-to-textarea").disabled = !(aiState.lastGenerated.length));
   if($("ai-usage")){
     const u = aiState.lastUsage;
-    const t = u ? `Tokens: in ${u.input_tokens}, out ${u.output_tokens}, total ${u.total_tokens}` : "";
-    $("ai-usage").textContent = `${aiState.lastModel ? ("Модель: " + aiState.lastModel + ". ") : ""}${t}`;
+    const parts = [];
+    if(aiState.lastModel) parts.push("Модель: " + aiState.lastModel);
+    if(u && u.tokens_unavailable) parts.push("Tokens: n/a");
+    if(u && (u.total_tokens != null || u.input_tokens != null || u.output_tokens != null)){
+      const tin = Number(u.input_tokens ?? 0) || 0;
+      const tout = Number(u.output_tokens ?? 0) || 0;
+      const ttot = (u.total_tokens != null) ? (Number(u.total_tokens) || 0) : (tin + tout);
+      parts.push(`Tokens: total ${ttot}, in ${tin}, out ${tout}`);
+    }
+    if(u && u.took_ms != null){
+      const sec = Math.max(0, Number(u.took_ms) || 0) / 1000;
+      parts.push(`Время: ${sec.toFixed(2)}s`);
+    }
+    $("ai-usage").textContent = parts.join(" · ");
   }
   return { ok:true, tasks: aiState.lastGenerated.slice(0, lim), usage: aiState.lastUsage };
 }
@@ -3187,7 +3233,8 @@ function aiInit(){
 
   $("ai-to-textarea")?.addEventListener("click", ()=>{
     if(!aiState.lastGenerated?.length) return;
-    $("host-tasks").value = aiState.lastGenerated.join("\n");
+    const lines = (aiState.lastGenerated || []).map(t => (typeof t === "string") ? t : (t && typeof t.text === "string" ? t.text : "")).map(s=>String(s||"").trim()).filter(Boolean);
+    $("host-tasks").value = lines.join("\n");
   });
 
   function aiPersist(){
@@ -4383,7 +4430,8 @@ socket.on("round-task", (p) => {
       hostState.totalRounds = p.totalRounds || hostState.totalRounds;
       hostRoundSetTask(p.task || "—", hostState.round, hostState.totalRounds);
       setHostView("round");
-      hostRoundStartTimer(p.countdownSeconds || 60);
+      try{ hostRoundState.collectEndsAt = Number(p.collectEndsAt || lastRoomStatus?.collectEndsAt || 0) || 0; }catch(e){}
+      hostRoundStartTimer(p.countdownSeconds || 60, hostRoundState.collectEndsAt);
       hostRoundUpdateProgress(lastRoomStatus);
     }
   }
@@ -4408,7 +4456,7 @@ socket.on("voting-started", ({ roomCode, memes, voteSeconds, voteEndsAt }) => {
       hostVoteState.voteStartAt = 0;
     }else if(!(hostVoteState.voteEndsAt > 0)){
       const vs = Number(voteSeconds);
-      if(Number.isFinite(vs) && vs > 0) hostVoteState.voteEndsAt = Date.now() + vs * 1000;
+      if(Number.isFinite(vs) && vs > 0) hostVoteState.voteEndsAt = mbAlignedNow() + vs * 1000;
     }
   }catch(e){}
   try{ pushDebug("voting-started", { roomCode, voteSeconds, voteEndsAt, clientNow: Date.now() }); }catch(e){}
